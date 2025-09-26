@@ -7,7 +7,7 @@ A minimal Node.js/TypeScript tool for Bitcoin-RGB-LN atomic swaps via P2WSH HTLC
 ```
 RGB-LN Invoice → Extract H → Build P2WSH HTLC → Fund → Pay → Claim with Preimage
                                     ↓
-                                Optimistic Swap
+                               Submarine Swap
                                     ↓
                               Timeout → Refund PSBT
 ```
@@ -17,7 +17,7 @@ RGB-LN Invoice → Extract H → Build P2WSH HTLC → Fund → Pay → Claim wit
 ✅ Extract payment hash from RGB-LN invoice  
 ✅ Build P2WSH HTLC with timelock refund path  
 ✅ Wait for funding confirmations  
-✅ Pay RGB-LN invoice (optimistically)  
+✅ Pay RGB-LN invoice (submarine swap)  
 ✅ Claim HTLC using preimage on success  
 ✅ Generate refund PSBT on timeout  
 
@@ -121,7 +121,7 @@ bitcoin-cli -regtest -rpcuser=rpcuser -rpcpassword=rpcpass generatetoaddress 1 $
    - Success path: `H' = SHA256(preimage), LP_can_claim`
    - Refund path: `tLock height + user_can_claim_after_height`  
 3. **Wait** for funding transaction confirmation
-4. **Pay** RGB-LN invoice (optimistic)
+4. **Pay** RGB-LN invoice (submarine swap)
 5. **Claim** HTLC using preimage if payment success
 6. **Refund** PSBT if payment timeout/failed
 
