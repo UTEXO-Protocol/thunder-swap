@@ -1,6 +1,6 @@
 # RGB-LN Submarine Swap POC
 
-🌊 A minimal Node.js/TypeScript tool for Bitcoin-RGB-LN atomic swaps via P2WSH HTLC.
+A minimal Node.js/TypeScript tool for Bitcoin-RGB-LN atomic swaps via P2WSH HTLC.
 
 ## Architecture
 
@@ -21,7 +21,7 @@ RGB-LN Invoice → Extract H → Build P2WSH HTLC → Fund → Pay → Claim wit
 ✅ Claim HTLC using preimage on success  
 ✅ Generate refund PSBT on timeout  
 
-## ⚡ Quick Start (regtest)
+## Quick Start (regtest)
 
 ### 1. Install Dependencies
 
@@ -125,7 +125,7 @@ bitcoin-cli -regtest -rpcuser=rpcuser -rpcpassword=rpcpass generatetoaddress 1 $
 5. **Claim** HTLC using preimage if payment success
 6. **Refund** PSBT if payment timeout/failed
 
-## ⚠️ Requirements
+## Requirements
 
 Your RGB-LN implementation **must** return the preimage upon successful payment:
 
