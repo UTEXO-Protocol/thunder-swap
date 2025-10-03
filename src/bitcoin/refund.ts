@@ -1,6 +1,10 @@
 import * as bitcoin from 'bitcoinjs-lib';
+import * as ecc from 'tiny-secp256k1';
 import { rpc } from './rpc.js';
 import { config } from '../config.js';
+
+// Initialize ECC library for bitcoinjs-lib
+bitcoin.initEccLib(ecc);
 
 interface UTXO {
   txid: string;

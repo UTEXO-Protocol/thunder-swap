@@ -1,6 +1,5 @@
 import { rpc } from './rpc.js';
 import { config } from '../config.js';
-import { Address } from 'bitcoinjs-lib';
 
 interface FundingUTXO {
   txid: string;
@@ -10,7 +9,7 @@ interface FundingUTXO {
 
 /**
  * Wait for funding UTXO to be confirmed
- * Uses scanTxOutSet as primary method, falls back to importAddress + listUnspent
+ * Uses scanTxOutSet to monitor for incoming transactions to the HTLC address
  */
 export async function waitForFunding(
   address: string, 
@@ -25,15 +24,15 @@ export async function waitForFunding(
       console.log(`Found ${result.total_amount} sats at ${address}`);
       
       // For proven UTXOs, we need to get more details
-      const utxos = result.utxos || [];
+      const utxos = result.unspents || [];
       if (utxos.length > 0) {
         // Find the first utxo that meets our amount requirement
         for (const utxo of utxos) {
           try {
             const txDetails = await rpc.getRawTransaction(utxo.txid, true);
             if (txDetails && txDetails.confirmations >= minConfs) {
-              const vout = utxo.height; // This might be vout index
-              const value = Math.round(utxo.combo * 100000000); // Convert BTC to sats
+              const vout = utxo.vout; // This might be vout index
+              const value = Math.round(utxo.amount * 100000000); // Convert BTC to sats
               
               return {
                 txid: utxo.txid,
@@ -49,39 +48,45 @@ export async function waitForFunding(
       }
     }
   } catch (error) {
-    console.log('scanTxOutSet not available, falling back to importAddress...');
+    console.log('scanTxOutSet not available, falling back to transaction monitoring...');
   }
 
-  // Fallback: importAddress + listUnspent
-  try {
-    await rpc.importAddress(address);
-  } catch (error) {
-    console.log('Could not import address, continuing anyway...');
-  }
-
-  // Poll listUnspent
+  // Fallback: Use getrawtransaction to check for funding
+  // Note: We don't import the HTLC address as it's not owned by our wallet
+  console.log('Using transaction monitoring fallback...');
+  
   const maxAttempts = 60; // 5 minutes at 5 second intervals
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
-      const unspent = await rpc.listUnspent();
-      const funding = unspent.find((utxo: any) => {
-        // Check if address belongs to this utxo
-        return utxo.spendable && 
-               utxo.confirmations >= minConfs &&
-               utxo.amount > 0;
-      });
-
-      if (funding) {
-        // We found a UTXO but need to verify it's for our specific address
-        console.log(`Found potential UTXO: ${funding.txid}:${funding.vout} (${funding.amount} BTC)`);
-        
-        // TODO: Add proper address matching logic
-        // For now, we'll assume the first qualifying UTXO is our funding
-        return {
-          txid: funding.txid,
-          vout: funding.vout,
-          value: Math.round(funding.amount * 100000000) // Convert BTC to sats
-        };
+      // Get recent block hash and check recent transactions
+      // This is a simplified approach - in production you'd want to use
+      // a more sophisticated method like watching the mempool or using
+      // a block explorer API
+      
+      // For now, we'll use scanTxOutSet again as it should work for watching
+      const result = await rpc.scanTxOutSet(address);
+      if (result.total_amount > 0) {
+        const utxos = result.unspents || [];
+        if (utxos.length > 0) {
+          // Find the first utxo that meets our confirmation requirement
+          for (const utxo of utxos) {
+            try {
+              const txDetails = await rpc.getRawTransaction(utxo.txid, true);
+              if (txDetails && txDetails.confirmations >= minConfs) {
+                const value = Math.round(utxo.amount * 100000000); // Convert BTC to sats
+                
+                return {
+                  txid: utxo.txid,
+                  vout: utxo.vout || 0, 
+                  value: value
+                };
+              }
+            } catch (error) {
+              console.log(`Error getting tx ${utxo.txid}:`, error);
+              continue;
+            }
+          }
+        }
       }
     } catch (error) {
       console.log(`Attempt ${attempt + 1} failed:`, error);

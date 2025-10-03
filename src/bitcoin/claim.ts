@@ -1,7 +1,14 @@
 import * as bitcoin from 'bitcoinjs-lib';
+import * as ecc from 'tiny-secp256k1';
 import { rpc } from './rpc.js';
 import { config } from '../config.js';
 import { hexToBuffer, sha256hex } from '../utils/crypto.js';
+import * as tinysecp from 'tiny-secp256k1';
+import { Signer, SignerAsync, ECPairInterface, ECPairFactory, ECPairAPI, TinySecp256k1Interface } from 'ecpair';
+
+// Initialize ECC library for bitcoinjs-lib
+bitcoin.initEccLib(ecc);
+const btcnetwork = bitcoin.networks.testnet;
 
 interface UTXO {
   txid: string;
@@ -31,11 +38,11 @@ export async function claimWithPreimage(
   }
   
   const preimage = hexToBuffer(preimageHex);
-  
+  const ECPair: ECPairAPI = ECPairFactory(tinysecp);
   // Parse WIF
-  let lpKeyPair: bitcoin.ECPairInterface;
+  let lpKeyPair: ECPairInterface;
   try {
-    lpKeyPair = bitcoin.ECPair.fromWIF(lpWif);
+    lpKeyPair = ECPair.fromWIF(lpWif,btcnetwork);
   } catch (error) {
     throw new Error(`Invalid LP WIF: ${error}`);
   }
@@ -121,6 +128,7 @@ export async function claimWithPreimage(
   
   // Broadcast transaction
   try {
+    console.log('Sending raw transaction...',rawTx);
     const txid = await rpc.sendRawTransaction(rawTx);
     console.log(`Claim transaction broadcast: ${txid}`);
     

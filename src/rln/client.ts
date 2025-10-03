@@ -50,8 +50,9 @@ export class RLNClient {
       });
 
       const result = response.data;
+      console.log('PayInvoiceResponse', result);
       
-      if (result.status === 'succeeded' && !result.preimage) {
+      if (result.status === 'Pending') {
         console.warn('WARNING: Payment succeeded but no preimage returned by RGB-LN node');
         console.warn('You may need to update your RGB-LN implementation to include preimage in payment response');
       }
@@ -74,6 +75,7 @@ export class RLNClient {
         payment_hash: paymentHash
       });
 
+      console.log('GetPaymentResponse', response.data);
       return response.data;
     } catch (error: any) {
       const errorMsg = error?.response?.data?.error || error?.message || 'Failed to get payment details';

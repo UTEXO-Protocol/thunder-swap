@@ -14,6 +14,9 @@ import { config } from '../config.js';
 import * as bitcoin from 'bitcoinjs-lib';
 import { Signer, SignerAsync, ECPairInterface, ECPairFactory, ECPairAPI, TinySecp256k1Interface } from 'ecpair';
 import * as tinysecp from 'tiny-secp256k1';
+
+// Initialize ECC library for bitcoinjs-lib
+bitcoin.initEccLib(tinysecp);
 const ECPair: ECPairAPI = ECPairFactory(tinysecp);
 
 
@@ -107,11 +110,11 @@ export async function runSwap({
     const keyPair2 = ECPair.fromPrivateKey(child.privateKey, { network, compressed: true });
     
     // Optional: WIF / address check
-    const wif = keyPair2.toWIF();
+    const LP_WIF = keyPair2.toWIF();
     // Step 3: Generate LP pubkey from WIF
     let lpKeyPair: ECPairInterface;
     try {
-      lpKeyPair = ECPair.fromWIF(wif,network);
+      lpKeyPair = ECPair.fromWIF(LP_WIF,network);
     } catch (error) {
       throw new Error(`Invalid LP WIF: ${error}`);
     }
@@ -137,34 +140,122 @@ export async function runSwap({
     console.log('\nStep 6: Paying RGB-LN invoice...');
     const paymentResult = await rlnClient.pay(invoice);
 
-    if (paymentResult.status === 'succeeded') {
-      let preimage = paymentResult.preimage;
+    if (paymentResult.status === 'Pending') {
+      console.log('   Payment initiated, status: Pending');
+      console.log('   Polling for payment completion...');
       
-      // If preimage not returned in payment response, try to get it via getPayment API
-      if (!preimage) {
-        console.log('\nStep 6b: Payment succeeded but no preimage returned, fetching via getPayment...');
+      // Poll getPayment until status changes from Pending
+      const maxAttempts = 60; // 5 minutes at 5 second intervals
+      let finalStatus = 'pending';
+      let preimage: string | undefined;
+      
+      for (let attempt = 0; attempt < maxAttempts; attempt++) {
         try {
           const paymentDetails = await rlnClient.getPayment(H);
-          preimage = paymentDetails.payment.preimage;
+          finalStatus = paymentDetails.payment.status;
           
-          if (!preimage) {
-            console.error('Fatal: Payment succeeded but no preimage available via getPayment API!');
-            console.error('   Check your RGB-LN implementation to include preimage in payment responses.');
-            return { success: false, error: 'Payment succeeded but no preimage available' };
+          console.log(`   Attempt ${attempt + 1}/${maxAttempts}: Status = ${finalStatus}`);
+          
+          if (finalStatus === 'Succeeded') {
+            preimage = paymentDetails.payment.preimage;
+            console.log(`   Payment succeeded! Preimage: ${preimage}`);
+            break;
+          } else if (finalStatus === 'Failed') {
+            console.log('   Payment failed');
+            break;
           }
-          console.log(`   Preimage retrieved via getPayment: ${preimage}`);
+          
+          // Wait 5 seconds before next attempt
+          await new Promise(resolve => setTimeout(resolve, 5000));
         } catch (error: any) {
-          console.error('Fatal: Failed to get preimage via getPayment API!');
-          console.error(`   Error: ${error.message}`);
-          return { success: false, error: `Failed to get preimage: ${error.message}` };
+          console.log(`   Attempt ${attempt + 1} failed: ${error.message}`);
+          await new Promise(resolve => setTimeout(resolve, 5000));
         }
       }
+      
+      if (finalStatus === 'Succeeded' && preimage) {
+        // Step 7: Verify preimage matches hash
+        console.log('\nStep 7: Verifying preimage...');
+        const preimageHash = sha256hex(hexToBuffer(preimage));
+        if (preimageHash !== H) {
+          throw new Error(`Preimage verification failed: ${preimageHash} !== ${H}`);
+        }
+        console.log(`   Preimage verified: ${preimage}`);
 
-      // const preimage = "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef";
+        // Step 8: Claim HTLC with preimage
+        console.log('\nStep 8: Claiming HTLC...');
+        const claimResult = await claimWithPreimage(
+          { txid: funding.txid, vout: funding.vout, value: funding.value },
+          htlcResult.redeemScript,
+          preimage,
+          LP_WIF,
+          config.LP_CLAIM_ADDRESS
+        );
+
+        console.log(`   Claim transaction broadcast: ${claimResult.txid}`);
+        return { success: true, txid: claimResult.txid };
+        
+      } else if (finalStatus === 'Failed') {
+        // Step 8b: Payment failed - prepare refund PSBT
+        console.log('\nStep 8b: Payment failed, preparing refund PSBT...');
+        const refundResult = await buildRefundPsbtBase64(
+          { txid: funding.txid, vout: funding.vout, value: funding.value },
+          htlcResult.redeemScript,
+          userRefundAddress,
+          tLock
+        );
+
+        console.log(`   Refund PSBT prepared (base64): ${refundResult.psbtBase64}`);
+        console.log('   Instructions:');
+        console.log(refundResult.instructions);
+
+        return {
+          success: false,
+          psbt: refundResult.psbtBase64,
+          instructions: refundResult.instructions
+        };
+      } else {
+        // Timeout
+        console.log('\nStep 8b: Payment timeout, preparing refund PSBT...');
+        const refundResult = await buildRefundPsbtBase64(
+          { txid: funding.txid, vout: funding.vout, value: funding.value },
+          htlcResult.redeemScript,
+          userRefundAddress,
+          tLock
+        );
+
+        console.log(`   Refund PSBT prepared (base64): ${refundResult.psbtBase64}`);
+        console.log('   Instructions:');
+        console.log(refundResult.instructions);
+
+        return {
+          success: false,
+          psbt: refundResult.psbtBase64,
+          instructions: refundResult.instructions
+        };
+      }
+      
+    } else if (paymentResult.status === 'Succeeded') {
+      // Handle immediate success (fallback for older implementations)
+      console.log('   Payment succeeded immediately');
+      console.log('   Fetching preimage via getPayment...');
+      
+      let preimage: string | undefined;
+      try {
+        const paymentDetails = await rlnClient.getPayment(H);
+        preimage = paymentDetails.payment.preimage;
+        
+        if (!preimage) {
+          return { success: false, error: 'Payment succeeded but no preimage available' };
+        }
+      } catch (error: any) {
+        console.error(`   Failed to get preimage: ${error.message}`);
+        return { success: false, error: `Failed to get preimage: ${error.message}` };
+      }
 
       // Step 7: Verify preimage matches hash
       console.log('\nStep 7: Verifying preimage...');
-      const preimageHash = sha256hex(hexToBuffer(preimage));
+      const preimageHash = sha256hex(hexToBuffer(preimage!));
       if (preimageHash !== H) {
         throw new Error(`Preimage verification failed: ${preimageHash} !== ${H}`);
       }
@@ -176,16 +267,16 @@ export async function runSwap({
         { txid: funding.txid, vout: funding.vout, value: funding.value },
         htlcResult.redeemScript,
         preimage,
-        config.LP_WIF,
+        LP_WIF,
         config.LP_CLAIM_ADDRESS
       );
 
       console.log(`   Claim transaction broadcast: ${claimResult.txid}`);
       return { success: true, txid: claimResult.txid };
-
+      
     } else {
-      // Step 8b: Payment failed - prepare refund PSBT
-      console.log('\nStep 8b: Payment failed, preparing refund PSBT...');
+      // Payment failed immediately
+      console.log('\nStep 8b: Payment failed immediately, preparing refund PSBT...');
       const refundResult = await buildRefundPsbtBase64(
         { txid: funding.txid, vout: funding.vout, value: funding.value },
         htlcResult.redeemScript,

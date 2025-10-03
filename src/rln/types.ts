@@ -11,9 +11,9 @@ export interface DecodeInvoiceResponse {
  * Response from pay invoice API call
  */
 export interface PayInvoiceResponse {
-  status: 'succeeded' | 'failed';
-  preimage?: string;
-  error?: string;
+  status: 'Succeeded' | 'Failed'|'Pending';
+  payment_hash: string;
+  payment_secret: string;
 }
 
 /**
