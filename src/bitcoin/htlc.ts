@@ -48,9 +48,9 @@ export function buildHtlcRedeemScript(
   const userPubkey = hexToBuffer(userPubkeyHex);
 
   // Encode time lock as little-endian 4-byte buffer
-  const lockTimeBuffer = Buffer.alloc(4);
-  lockTimeBuffer.writeUInt32LE(tLock, 0);
-
+  // const lockTimeBuffer = Buffer.alloc(4);
+  // lockTimeBuffer.writeUInt32LE(tLock, 0);
+  const lockTimeBuffer = bitcoin.script.number.encode(tLock);
   // Build the redeem script using proper script compilation
   const compiledScript = bitcoin.script.compile([
     // Conditional branch

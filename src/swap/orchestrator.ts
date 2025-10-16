@@ -51,6 +51,12 @@ export async function runSwap({
     // Step 1: Decode RGB-LN invoice to get payment hash and amount
     console.log('Step 1: Decoding RGB-LN invoice...');
     const decodedInvoice = await rlnClient.decode(invoice);
+     // TODO: test data
+    // const decodedInvoice = {
+    //   payment_hash: 'f4d376425855e2354bf30e17904f4624f6f9aa297973cca0445cdf4cef718b2a',
+    //   amt_msat: 3000000,
+    //   expires_at: 1759931597
+    // };
     const H = decodedInvoice.payment_hash;
     const amount_sat = decodedInvoice.amt_msat;
     const expires_at = decodedInvoice.expires_at;
@@ -139,6 +145,8 @@ export async function runSwap({
     // Step 6: Pay RGB-LN invoice
     console.log('\nStep 6: Paying RGB-LN invoice...');
     const paymentResult = await rlnClient.pay(invoice);
+     // TODO: test data
+    // const paymentResult = { status: 'Succeeded' };
 
     if (paymentResult.status === 'Pending') {
       console.log('   Payment initiated, status: Pending');
@@ -244,6 +252,8 @@ export async function runSwap({
       try {
         const paymentDetails = await rlnClient.getPayment(H);
         preimage = paymentDetails.payment.preimage;
+        // TODO: test data
+        // preimage = '86a85cd1cb86c51186d190972c9f8413f436911fc0de241b6df20877ebbadecc';
         
         if (!preimage) {
           return { success: false, error: 'Payment succeeded but no preimage available' };

@@ -243,7 +243,7 @@ bitcoin-cli -regtest -rpcuser=rpcuser -rpcpassword=rpcpass dumpprivkey bcrt1q4av
 }
 "lnbcrt30u1p5dlupldpq2pshjmt9de6zqen0wgs8xetjwe5kxetnnp4q0tvyas524ccf5nfh893nvduxfreuesas65jtaxyu3k8xjkuag73jpp5drfqexpzzjy3d2vsgl5uz0y8kqf9akhs400tls3j9ql7992tqx8ssp5wyarltt7h36lad3687ht8v5yegqf8uc2dc9hp58rs6pe2yh2hp6q9qyysgqcqpcxqrc6vf4dw8flx9n5gr65s0gvp668lepkc3ktn49m7g7jyegef7er9z4l49vc3utgm5exl6kpmyn8rsjqkwtj9e9fuuuwfk46llp85ly2sm3qprw6s5k"
 
-npx tsx src/index.ts "lnbcrt30u1p5dlupldpq2pshjmt9de6zqen0wgs8xetjwe5kxetnnp4q0tvyas524ccf5nfh893nvduxfreuesas65jtaxyu3k8xjkuag73jpp5drfqexpzzjy3d2vsgl5uz0y8kqf9akhs400tls3j9ql7992tqx8ssp5wyarltt7h36lad3687ht8v5yegqf8uc2dc9hp58rs6pe2yh2hp6q9qyysgqcqpcxqrc6vf4dw8flx9n5gr65s0gvp668lepkc3ktn49m7g7jyegef7er9z4l49vc3utgm5exl6kpmyn8rsjqkwtj9e9fuuuwfk46llp85ly2sm3qprw6s5k" "02d7630c597863a0d77a2a9dc1484d16df98166de22a56eaa29b9154c99b6b0f53" "bcrt1pcgtelvseah02naxayqvskrlhkc3nt77c6hra37vg56lhs6ne2vqqqnjg9p"
+npx tsx src/index.ts "lnbcrt30u1p5w2vj7dpq2pshjmt9de6zqen0wgs8xetjwe5kxetnnp4q0tvyas524ccf5nfh893nvduxfreuesas65jtaxyu3k8xjkuag73jpp5lfdruadwfms3ctztx8zf2t0ffqar9qr6lu7gfjrjy2sfjlkytenssp54hsd2r78nlcffp87zgzhek40c784jnguy3uexz3p79g2gr3juj3q9qyysgqcqpcxqrwz569kqe93nhpejcvnr8hzmuwth2tlgthwccr78nu8cvullkjsqxw632tj2fpt0huy5m8vggr2p2n4pugqzr6hu8s365fgagpkytrqkq2spd4p87g" "02d7630c597863a0d77a2a9dc1484d16df98166de22a56eaa29b9154c99b6b0f53" "bcrt1pcgtelvseah02naxayqvskrlhkc3nt77c6hra37vg56lhs6ne2vqqqnjg9p"
 
 Step 5: Waiting for funding confirmation...
 Waiting for funding at bcrt1qa6l4ktt33hca3t9f9g5gfdy2an0rmj9hwfrja6gqjudgg24dxsqqgjk44q with 1 confirmations...
@@ -281,4 +281,28 @@ Polling for funding confirmation (attempt 1/60)...
     }
   ]]
 }
+{"jsonrpc":"2.0","id":1,"method": "scantxoutset",
+  "params": ["start", ["addr(bcrt1q4avda4xxrcngeaqvg603ep0j7cmh5384a8zqwa)"]]}
 
+  {
+    "result": {
+        "success": true,
+        "txouts": 20490,
+        "height": 20122,
+        "bestblock": "7fb5228d5f636fce978c37dc1abe91016a1a6afbc3f4d6bcc857a1784fe5a9b3",
+        "unspents": [
+            {
+                "txid": "0227783a339e259c712a4c257398a7505c1ad82a5448b373f913749a168a6583",
+                "vout": 0,
+                "scriptPubKey": "0014af58ded4c61e268cf40c469f1c85f2f6377a44f5",
+                "desc": "addr(bcrt1q4avda4xxrcngeaqvg603ep0j7cmh5384a8zqwa)#7utesrv5",
+                "amount": 0.09999000,
+                "coinbase": false,
+                "height": 20122
+            }
+        ],
+        "total_amount": 0.09999000
+    },
+    "error": null,
+    "id": 1
+}

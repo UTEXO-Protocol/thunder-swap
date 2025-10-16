@@ -38,11 +38,21 @@ export async function claimWithPreimage(
   }
   
   const preimage = hexToBuffer(preimageHex);
+  console.log('Preimage length:', preimage.length, 'bytes');
+  console.log('Preimage hex:', Buffer.from(preimage).toString('hex'));
+  
+  // Validate preimage format
+  if (preimage.length !== 32) {
+    throw new Error(`Invalid preimage length: ${preimage.length} bytes, expected 32`);
+  }
+  
   const ECPair: ECPairAPI = ECPairFactory(tinysecp);
   // Parse WIF
   let lpKeyPair: ECPairInterface;
   try {
-    lpKeyPair = ECPair.fromWIF(lpWif,btcnetwork);
+    lpKeyPair = ECPair.fromWIF(lpWif, btcnetwork);
+    console.log('LP KeyPair created successfully');
+    console.log('Public key:', Buffer.from(lpKeyPair.publicKey).toString('hex'));
   } catch (error) {
     throw new Error(`Invalid LP WIF: ${error}`);
   }
@@ -64,23 +74,18 @@ export async function claimWithPreimage(
       throw new Error(`Unsupported network: ${config.NETWORK}`);
   }
 
-  // Create refund transaction
+  // Create transaction manually for HTLC witness
   const tx = new bitcoin.Transaction();
   tx.version = 2;
 
   // Add input
   const txHash = Buffer.from(utxo.txid, 'hex').reverse();
-  const txInput = {
-    hash: txHash,
-    index: utxo.vout,
-    sequence: 0xffffffff
-  };
-  tx.addInput(txInput.hash, txInput.index, txInput.sequence);
+  tx.addInput(txHash, utxo.vout, 0xffffffff);
 
   // Create output to our claim address
   const claimAddress = bitcoin.address.toOutputScript(lpClaimAddress, network);
   
-  // Estimate fee (simple estimate, could be improved with Bitcoin Core fee estimation)
+  // Estimate fee
   const estimatedFee = 1000; // 1000 sats fee estimate
   const outputValue = utxo.value - estimatedFee;
   
@@ -90,31 +95,39 @@ export async function claimWithPreimage(
 
   tx.addOutput(claimAddress, outputValue);
 
-  // Build witness for Stealth path (with preimage)
-  // Witness: [LP_sig, preimage, OP_TRUE, redeemScript]
-  
-  const preimageHash = sha256hex(preimage);
-  console.log(`Using preimage hash: ${preimageHash}`);
-
-  // Create transaction for signing (get hash to sign)
-  const redeemTx = tx.clone();
-  
-  // Sign the transaction
+  // Create hash for signing
   const hashType = bitcoin.Transaction.SIGHASH_ALL;
-  const signatureHash = redeemTx.hashForWitnessV0(
+  const signatureHash = tx.hashForWitnessV0(
     0, // input index
     redeemScript,
     utxo.value,
     hashType
   );
   
+  // Sign with proper DER encoding
   const signature = lpKeyPair.sign(signatureHash);
-  const signatureWithHashType = Buffer.concat([signature, Buffer.from([hashType])]);
+  console.log('Signature length:', signature.length);
+  console.log('Signature hex:', Buffer.from(signature).toString('hex'));
   
-  // Build witness stack
-  // [LP_sig, preimage, OP_TRUE, redeemScript]
+  // Validate DER signature format
+  if (signature.length !== 71) {
+    console.warn(`Warning: Signature length is ${signature.length}, expected 71 for DER format`);
+  }
+  
+  // Check if signature starts with DER header (0x30)
+  if (signature[0] !== 0x30) {
+    console.warn('Warning: Signature does not start with DER header (0x30)');
+  }
+  
+  // Ensure signature is DER-encoded (ECPair should do this automatically)
+  
+  const sigDerPlus = bitcoin.script.signature.encode(Buffer.from(signature), hashType);
+  // const signatureWithHashType = Buffer.concat([signature, Buffer.from([hashType])]);
+  console.log('Signature with hash type length:', sigDerPlus.length);
+  
+  // Build witness stack for HTLC claim: [LP_sig, preimage, OP_TRUE, redeemScript]
   const witness: Buffer[] = [
-    signatureWithHashType,  // LP signature
+    sigDerPlus,  // LP signature
     preimage,               // Secret preimage
     Buffer.from([1]),       // OP_TRUE for claiming path
     redeemScript            // Full redeem script
