@@ -1,39 +1,48 @@
 #!/usr/bin/env node
-import { runSwap } from './swap/orchestrator.js';
+import { runDeposit } from './swap/orchestrator.js';
 import { isValidCompressedPubkey, validateWIF } from './utils/crypto.js';
 import { config } from './config.js';
+import readline from 'node:readline/promises';
+import { stdin as input, stdout as output } from 'node:process';
 
 interface ParsedArgs {
-  invoice: string;
+  amountSat: number;
   userRefundPubkeyHex: string;
   userRefundAddress: string;
 }
 
-function parseArgs(): ParsedArgs {
+async function promptAmount(): Promise<{ amountSat: number }> {
+  const rl = readline.createInterface({ input, output });
+
+  const amountAnswer = await rl.question('Enter swap amount in sats: ');
+  const amountSat = parseInt(amountAnswer.trim(), 10);
+  if (!Number.isFinite(amountSat) || amountSat <= 0) {
+    rl.close();
+    throw new Error('Invalid amount. Must be a positive integer number of sats.');
+  }
+
+  rl.close();
+  return { amountSat };
+}
+
+async function parseArgs(): Promise<ParsedArgs> {
   const args = process.argv.slice(2);
-  
-  if (args.length < 3) {
-    console.error('Usage: npx tsx src/index.ts "<RGB_INVOICE>" "<USER_REFUND_PUBKEY_HEX>" "<USER_REFUND_ADDRESS>"');
+
+  if (args.length < 2) {
+    console.error('Usage: npx tsx src/index.ts "<USER_REFUND_PUBKEY_HEX>" "<USER_REFUND_ADDRESS>"');
     console.error('');
     console.error('Example:');
-    console.error('  npx tsx src/index.ts "rgb1..." "02abc..." "tb1..."');
+    console.error('  npx tsx src/index.ts "02abc..." "tb1..."');
     console.error('');
     console.error('Arguments:');
-    console.error('  RGB_INVOICE         RGB-LN invoice string');
     console.error('  USER_REFUND_PUBKEY User refund public key (33 bytes compressed hex)');
     console.error('  USER_REFUND_ADDRESS User refund Bitcoin address');
     process.exit(1);
   }
 
-  const [invoice, userRefundPubkeyHex, userRefundAddress] = args;
+  const [userRefundPubkeyHex, userRefundAddress] = args;
 
   // Validate inputs
-  if (invoice.length < 10 || !invoice.startsWith('ln')) {
-    console.error('ERROR: Invalid RGB invoice format');
-    console.error('  Expected format: ln...');
-    process.exit(1);
-  }
-
   if (!isValidCompressedPubkey(userRefundPubkeyHex)) {
     console.error('ERROR: Invalid user refund pubkey');
     console.error('  Expected: 33-byte compressed pubkey (66 hex chars starting with 02/03)');
@@ -42,13 +51,15 @@ function parseArgs(): ParsedArgs {
   }
 
   if (userRefundAddress.length < 26 || userRefundAddress.length > 90) {
-    console.error('ERROR: Invalid user refund address format',userRefundAddress);
+    console.error('ERROR: Invalid user refund address format', userRefundAddress);
     console.error('  Expected valid Bitcoin address');
     process.exit(1);
   }
 
+  const { amountSat } = await promptAmount();
+
   return {
-    invoice,
+    amountSat,
     userRefundPubkeyHex,
     userRefundAddress
   };
@@ -56,20 +67,23 @@ function parseArgs(): ParsedArgs {
 
 function validateEnvironment(): void {
   console.log('🔧 Environment configuration check...');
-  
+
   // Check required env vars
   try {
     console.log(`   Bitcoin RPC: ${config.BITCOIN_RPC_URL}`);
     console.log(`   Network: ${config.NETWORK}`);
     console.log(`   LP WIF: ${config.LP_WIF.slice(0, 10)}...`);
+    if (config.LP_PUBKEY_HEX) {
+      console.log(`   LP Pubkey (hex): ${config.LP_PUBKEY_HEX}`);
+    }
     console.log(`   LP Claim: ${config.LP_CLAIM_ADDRESS}`);
     console.log(`   RLN URL: ${config.RLN_BASE_URL}`);
-    
+
     // Validate WIF format
     if (!validateWIF(config.LP_WIF)) {
       throw new Error('LP_WIF is not a valid WIF format');
     }
-    
+
     console.log('   Environment looks good\n');
   } catch (error: any) {
     console.error(`Environment setup error: ${error.message}`);
@@ -87,33 +101,28 @@ async function main(): Promise<void> {
     validateEnvironment();
 
     // Parse command line arguments
-    const args = parseArgs();
+    const args = await parseArgs();
 
     console.log('Swap Parameters:');
-    console.log(`   Invoice: ${args.invoice.slice(0, 20)}...`);
+    console.log(`   Amount: ${args.amountSat} sats`);
     console.log(`   User Pubkey: ${args.userRefundPubkeyHex.slice(0, 20)}...`);
     console.log(`   Refund Address: ${args.userRefundAddress}\n`);
 
-    // Run the swap
-    const result = await runSwap(args);
+    // User-side deposit flow: create HODL invoice and wait for funding
+    const result = await runDeposit(args);
 
     console.log('\n=====================================');
-    if (result.success && result.txid) {
-      console.log('SUCCESS: HTLC claimed!');
-      console.log(`   Claim Transaction ID: ${result.txid}`);
-      console.log(`   Block Explorer: https://blockstream.info/tx/${result.txid}`);
-    } else if (result.psbt && result.instructions) {
-      console.log('PAYMENT FAILED: Refund PSBT prepared');
-      console.log(`   Refund PSBT: ${result.psbt}`);
-      console.log('\n' + result.instructions);
-    } else {
-      console.log('SWAP FAILED');
-      if (result.error) {
-        console.log(`   Error: ${result.error}`);
-      }
-      process.exit(1);
-    }
-
+    console.log('HODL invoice prepared and deposit confirmed.');
+    console.log(`   Invoice: ${result.invoice}`);
+    console.log(`   Payment Hash: ${result.payment_hash}`);
+    console.log(`   Preimage: ${result.preimage}`);
+    console.log(`   Payment Secret: ${result.payment_secret}`);
+    console.log(`   HTLC (P2TR) Address: ${result.htlc_p2tr_address}`);
+    console.log(`   Internal Key (hex): ${result.htlc_p2tr_internal_key_hex}`);
+    console.log(
+      `   Funding: ${result.funding.txid}:${result.funding.vout} (${result.funding.value} sats)`
+    );
+    console.log('Share invoice with the payer; proceed to node-side execution to pay/claim.');
   } catch (error: any) {
     console.error(`Fatal error: ${error.message}`);
     console.error('   Stack trace:', error.stack);

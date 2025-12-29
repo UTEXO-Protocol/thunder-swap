@@ -5,20 +5,22 @@
   "scripts": {
     "dev": "tsx src/index.ts",
     "start": "node --enable-source-maps dist/index.js",
-    "build": "tsc -p tsconfig.json"
+    "build": "tsc -p tsconfig.json",
+    "test": "tsx src/bitcoin/htlc_p2tr.test.ts && tsx src/swap/runDeposit.test.ts"
   },
   "dependencies": {
     "axios": "^1.7.2",
-    "bip32": "^5.0.0",
+    "bip32": "^4.0.0",
     "bitcoinjs-lib": "^6.1.5",
     "dotenv": "^16.4.5",
-    "ecpair": "^3.0.0",
+    "ecpair": "^2.1.0",
     "tiny-secp256k1": "^2.2.3",
     "uint8array-tools": "^0.0.9",
     "zod": "^3.23.8"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
+    "prettier": "^3.7.4",
     "tsx": "^4.15.7",
     "typescript": "^5.6.2"
   }

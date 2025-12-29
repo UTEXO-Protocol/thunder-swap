@@ -40,10 +40,53 @@ export interface GetPaymentResponse {
 }
 
 /**
+ * Request for creating a HODL invoice
+ */
+export interface InvoiceHodlRequest {
+  payment_hash: string;
+  expiry_sec: number;
+  amt_msat?: number;
+  asset_id?: string;
+  asset_amount?: number;
+  external_ref?: string;
+}
+
+/**
+ * Response from creating a HODL invoice
+ */
+export interface InvoiceHodlResponse {
+  invoice: string;
+  payment_secret: string;
+}
+
+/**
+ * Request for settling a HODL invoice
+ */
+export interface InvoiceSettleRequest {
+  payment_hash: string;
+  payment_preimage: string;
+}
+
+/**
+ * Request for canceling a HODL invoice
+ */
+export interface InvoiceCancelRequest {
+  payment_hash: string;
+}
+
+/**
+ * Empty response for settle/cancel operations
+ */
+export interface EmptyResponse {}
+
+/**
  * Base RGB-LN API client interface
  */
 export interface RLNClientInterface {
   decode(invoice: string): Promise<DecodeInvoiceResponse>;
   pay(invoice: string): Promise<PayInvoiceResponse>;
   getPayment(paymentHash: string): Promise<GetPaymentResponse>;
+  invoiceHodl(request: InvoiceHodlRequest): Promise<InvoiceHodlResponse>;
+  invoiceSettle(request: InvoiceSettleRequest): Promise<EmptyResponse>;
+  invoiceCancel(request: InvoiceCancelRequest): Promise<EmptyResponse>;
 }

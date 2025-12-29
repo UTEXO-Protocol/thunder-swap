@@ -1,6 +1,15 @@
 import axios, { AxiosInstance } from 'axios';
 import { config } from '../config.js';
-import { DecodeInvoiceResponse, PayInvoiceResponse, GetPaymentResponse } from './types.js';
+import {
+  DecodeInvoiceResponse,
+  PayInvoiceResponse,
+  GetPaymentResponse,
+  InvoiceHodlRequest,
+  InvoiceHodlResponse,
+  InvoiceSettleRequest,
+  InvoiceCancelRequest,
+  EmptyResponse
+} from './types.js';
 
 /**
  * RGB-LN API client for invoice decode and payment
@@ -80,6 +89,61 @@ export class RLNClient {
     } catch (error: any) {
       const errorMsg = error?.response?.data?.error || error?.message || 'Failed to get payment details';
       throw new Error(`RLN getPayment error: ${errorMsg}`);
+    }
+  }
+
+  /**
+   * Create a HODL invoice with a client-provided payment hash
+   * Settlement is deferred until settle/cancel is called
+   */
+  async invoiceHodl(request: InvoiceHodlRequest): Promise<InvoiceHodlResponse> {
+    try {
+      console.log('Creating HODL invoice...');
+
+      const response = await this.httpClient.post('/invoice/hodl', request);
+
+      console.log('InvoiceHodlResponse', response.data);
+      return response.data;
+    } catch (error: any) {
+      const errorMsg =
+        error?.response?.data?.error || error?.message || 'Failed to create HODL invoice';
+      throw new Error(`RLN invoiceHodl error: ${errorMsg}`);
+    }
+  }
+
+  /**
+   * Settle a HODL invoice by claiming the RLN-held HTLC
+   */
+  async invoiceSettle(request: InvoiceSettleRequest): Promise<EmptyResponse> {
+    try {
+      console.log(`Settling HODL invoice for payment hash: ${request.payment_hash}...`);
+
+      const response = await this.httpClient.post('/invoice/settle', request);
+
+      console.log('Invoice settled successfully');
+      return response.data;
+    } catch (error: any) {
+      const errorMsg =
+        error?.response?.data?.error || error?.message || 'Failed to settle HODL invoice';
+      throw new Error(`RLN invoiceSettle error: ${errorMsg}`);
+    }
+  }
+
+  /**
+   * Cancel a HODL invoice by failing the RLN-held HTLC backwards
+   */
+  async invoiceCancel(request: InvoiceCancelRequest): Promise<EmptyResponse> {
+    try {
+      console.log(`Canceling HODL invoice for payment hash: ${request.payment_hash}...`);
+
+      const response = await this.httpClient.post('/invoice/cancel', request);
+
+      console.log('Invoice canceled successfully');
+      return response.data;
+    } catch (error: any) {
+      const errorMsg =
+        error?.response?.data?.error || error?.message || 'Failed to cancel HODL invoice';
+      throw new Error(`RLN invoiceCancel error: ${errorMsg}`);
     }
   }
 }

@@ -1,5 +1,7 @@
 import axios from 'axios';
+import * as bitcoin from 'bitcoinjs-lib';
 import { config } from '../config.js';
+import { isValidHex } from '../utils/crypto.js';
 
 interface RPCResponse<T = any> {
   result: T;
@@ -16,6 +18,71 @@ interface BitcoinRPCClient {
   scanTxOutSet(address: string): Promise<any>;
   listUnspent(minconf?: number, maxconf?: number, addresses?: string[]): Promise<any[]>;
   importAddress(address: string): Promise<void>;
+  getTransactionOutput(
+    txid: string,
+    vout: number,
+    options?: GetTransactionOutputOptions
+  ): Promise<TransactionOutput>;
+}
+
+export interface GetTransactionOutputOptions {
+  expectedAddress?: string;
+  expectedScriptPubKeyHex?: string;
+  requireUnspent?: boolean;
+  network?: bitcoin.Network;
+}
+
+export interface TransactionOutput {
+  scriptPubKey: {
+    asm: string;
+    hex: string;
+    reqSigs?: number;
+    type: string;
+    addresses?: string[];
+    address?: string;
+  };
+  value: number; // BTC amount
+  n: number; // vout index
+}
+
+const TXID_REGEX = /^[0-9a-fA-F]{64}$/;
+
+function assertValidTxid(txid: string): void {
+  if (!TXID_REGEX.test(txid)) {
+    throw new Error('txid must be a 64-character hex string');
+  }
+}
+
+function assertValidVout(vout: number): void {
+  if (!Number.isInteger(vout) || vout < 0) {
+    throw new Error('vout must be a non-negative integer');
+  }
+
+  if (vout > 0xffffffff) {
+    throw new Error('vout must be <= 0xffffffff');
+  }
+}
+
+function getNetwork(): bitcoin.Network {
+  switch (config.NETWORK) {
+    case 'mainnet':
+      return bitcoin.networks.bitcoin;
+    case 'testnet':
+    case 'signet':
+      return bitcoin.networks.testnet;
+    case 'regtest':
+      return bitcoin.networks.regtest;
+    default:
+      throw new Error(`Unsupported network: ${config.NETWORK}`);
+  }
+}
+
+function normalizeHex(hex: string): string {
+  return hex.toLowerCase();
+}
+
+function isValidHexBytes(hex: string): boolean {
+  return isValidHex(hex) && hex.length % 2 === 0;
 }
 
 class BitcoinRPCClientImpl implements BitcoinRPCClient {
@@ -69,7 +136,8 @@ class BitcoinRPCClientImpl implements BitcoinRPCClient {
   }
 
   async scanTxOutSet(address: string): Promise<any> {
-    return this.rpcCall('scantxoutset', ['start', [{ 'desc': `addr(${address})` }]]);
+    return this.rpcCall('scantxoutset', ['start', [{ desc: `addr(${address})` }]]);
+    // TODO: review if should be return this.rpcCall('scantxoutset', ['start', [`addr(${address})`]]);
   }
 
   async listUnspent(minconf = 0, maxconf = 9999999, addresses: string[] = []): Promise<any[]> {
@@ -82,6 +150,81 @@ class BitcoinRPCClientImpl implements BitcoinRPCClient {
 
   async importAddress(address: string): Promise<void> {
     return this.rpcCall('importaddress', [address, '', false], 'swap');
+  }
+
+  private async getTxOut(txid: string, vout: number, includeMempool = true): Promise<any | null> {
+    return this.rpcCall('gettxout', [txid, vout, includeMempool]);
+  }
+
+  /**
+   * Get specific transaction output details
+   * Returns output at specified vout index including scriptPubKey and value
+   */
+  async getTransactionOutput(
+    txid: string,
+    vout: number,
+    options: GetTransactionOutputOptions = {}
+  ): Promise<TransactionOutput> {
+    assertValidTxid(txid);
+    assertValidVout(vout);
+
+    const tx = await this.getRawTransaction(txid, true);
+
+    if (!tx || !tx.vout || vout >= tx.vout.length) {
+      throw new Error(`Output ${vout} not found in transaction ${txid}`);
+    }
+
+    const output = tx.vout[vout] as TransactionOutput;
+    if (!output || output.n !== vout) {
+      throw new Error(`Output ${vout} not found in transaction ${txid}`);
+    }
+
+    if (!output.scriptPubKey || !output.scriptPubKey.hex) {
+      throw new Error(`Output ${vout} is missing scriptPubKey data`);
+    }
+
+    if (!isValidHexBytes(output.scriptPubKey.hex)) {
+      throw new Error(`Output ${vout} has invalid scriptPubKey hex`);
+    }
+
+    if (options.requireUnspent ?? true) {
+      const utxo = await this.getTxOut(txid, vout, true);
+      if (!utxo) {
+        throw new Error(`Output ${vout} in ${txid} is spent or missing`);
+      }
+    }
+
+    if (options.expectedScriptPubKeyHex) {
+      if (!isValidHexBytes(options.expectedScriptPubKeyHex)) {
+        throw new Error('expectedScriptPubKeyHex must be valid hex');
+      }
+
+      if (normalizeHex(options.expectedScriptPubKeyHex) !== normalizeHex(output.scriptPubKey.hex)) {
+        throw new Error(`Output ${vout} scriptPubKey does not match expected script`);
+      }
+    }
+
+    if (options.expectedAddress) {
+      const network = options.network ?? getNetwork();
+      const expectedAddress = options.expectedAddress.trim();
+      if (!expectedAddress) {
+        throw new Error('expectedAddress must be a non-empty string');
+      }
+
+      let expectedOutput: Buffer;
+      try {
+        expectedOutput = bitcoin.address.toOutputScript(expectedAddress, network);
+      } catch (error) {
+        throw new Error(`Invalid expectedAddress ${expectedAddress}: ${error}`);
+      }
+
+      const actualOutput = Buffer.from(output.scriptPubKey.hex, 'hex');
+      if (!expectedOutput.equals(actualOutput)) {
+        throw new Error(`Output ${vout} scriptPubKey does not match expected address`);
+      }
+    }
+
+    return output;
   }
 }
 

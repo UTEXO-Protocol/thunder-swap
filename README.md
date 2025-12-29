@@ -62,6 +62,7 @@ LOCKTIME_BLOCKS=36
 
 # Your LP keys (generate one):
 LP_WIF=L33tGeneratedPrivateKeyAndPublicKeyWIF...
+LP_PUBKEY_HEX=02abcdef...            # REQUIRED: compressed LP pubkey hex (clients need this)
 LP_CLAIM_ADDRESS=addrToReceiveClaimedFunds...
 
 # RGB-LN Node
@@ -75,8 +76,10 @@ Generate LP keypair:
 # Get a new address and private key for LP operations
 ADDRESS=$(bitcoin-cli -regtest -rpcuser=rpcuser -rpcpassword=rpcpass getnewaddress)
 WIF=$(bitcoin-cli -regtest -rpcuser=rpcuser -rpcpassword=rpcpass dumpprivkey $ADDRESS)
+PUBKEY_HEX=$(bitcoin-cli -regtest -rpcuser=rpcuser -rpcpassword=rpcpass getaddressinfo $ADDRESS | jq -r .pubkey)
 echo "LP_CLAIM_ADDRESS=$ADDRESS"
 echo "LP_WIF=$WIF"
+echo "LP_PUBKEY_HEX=$PUBKEY_HEX"   # required; clients must have LP pubkey
 ```
 
 ### 4. Fund LP Address
@@ -90,19 +93,34 @@ bitcoin-cli -regtest -rpcuser=rpcuser -rpcpassword=rpcpass generatetoaddress 6 $
 ### 5. Start RGB-LN Node
 
 Ensure your RGB-LN node is running on `http://localhost:8080` with endpoints:
+
 - `POST /decode` - Decode invoice return `{payment_hash, amount_sat, expires_at?}`
 - `POST /pay` - Pay invoice, return `{status, preimage?}` (must include preimage on success)
 
-### 6. Run Swap
+### 6. Run Swap (HODL invoice creator)
 
 ```bash
-npx tsx src/index.ts "rgb1..." "02abc..." "tb1..."
+npx tsx src/index.ts "02abc..." "tb1..."
 ```
 
-Replace:
-- `"rgb1..."` with the user's RGB-LN invoice (the invoice they want to pay)
-- `"02abc..."` with the user's refund public key (64 hex chars, compressed)  
-- `"tb1..."` with the user's refund Bitcoin address
+The tool now:
+
+- Prompts for swap amount in sats
+- Generates a 32-byte preimage and payment hash
+- Creates a HODL invoice via `/invoice/hodl` (default expiry 86400s)
+- Stores `payment_hash → preimage + metadata` in `hodl_store.json`
+
+Args:
+
+- `"02abc..."` user refund public key (33-byte compressed hex)
+- `"tb1..."` user refund Bitcoin address
+
+### Run deposit flow (UX recap)
+
+- Set env: `BITCOIN_RPC_URL`, `BITCOIN_RPC_USER`, `BITCOIN_RPC_PASS`, `NETWORK`, `MIN_CONFS`, `LOCKTIME_BLOCKS`, `LP_PUBKEY_HEX`, `RLN_BASE_URL`.
+- LP must provide `LP_PUBKEY_HEX` to the client. LP keeps `LP_WIF` / `LP_ACCOUNT_XPRV` / `LP_CLAIM_ADDRESS` for claiming.
+- Command: `npx tsx src/index.ts "<USER_REFUND_PUBKEY_HEX>" "<USER_REFUND_ADDRESS>"`.
+- The script prompts for amount (sats), prints HODL invoice + HTLC address; fund that address for the swap to proceed.
 
 ### 7. Send Funding
 
@@ -116,8 +134,8 @@ bitcoin-cli -regtest -rpcuser=rpcuser -rpcpassword=rpcpass generatetoaddress 1 $
 
 ## Flow
 
-1. **Decode** RGB-LN invoice → extract payment hash H
-2. **Build** P2WSH HTLC with conditional:
+1. **Create** HODL invoice → generate preimage/hash (H) locally
+2. **Build** P2TR HTLC with conditional:
    - Success path: `H' = SHA256(preimage), LP_can_claim`
    - Refund path: `tLock height + user_can_claim_after_height`  
 3. **Wait** for funding transaction confirmation
@@ -149,6 +167,14 @@ If not implemented, extend your RGB-LN node to include preimage in outgoing paym
 - ✅ Verifies preimage matches payment hash (H)
 - ✅ Confirms HTLC funding before payment attempt  
 - ✅ Safe refund PSBT with timelock validation  
+## Tests
+
+```bash
+npm test
+```
+
+- Taproot HTLC unit tests
+- `runDeposit` unit + integration-style tests (mocked deps for fast, deterministic UX)
 
 ## Examples
 

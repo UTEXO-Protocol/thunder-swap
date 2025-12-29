@@ -1,4 +1,9 @@
 import { createHash } from 'node:crypto';
+import * as bitcoin from 'bitcoinjs-lib';
+import * as ecc from 'tiny-secp256k1';
+
+// Initialize ECC library for bitcoinjs-lib
+bitcoin.initEccLib(ecc);
 
 /**
  * Compute SHA256 hash of buffer and return as hex string
@@ -57,5 +62,36 @@ export function validateWIF(wif: string): boolean {
     return /^[5KL][1-9A-HJ-NP-Za-km-z]{50,51}$/.test(wif);
   } catch {
     return false;
+  }
+}
+
+/**
+ * Validate payment hash (32 bytes, 64 hex characters)
+ */
+export function assertValidPaymentHash(paymentHashHex: string): void {
+  if (!/^[0-9a-fA-F]{64}$/.test(paymentHashHex)) {
+    throw new Error('Payment hash must be 64-character hex string (32 bytes)');
+  }
+}
+
+/**
+ * Validate compressed pubkey (33 bytes, 66 hex characters, starts with 02/03)
+ */
+export function assertValidCompressedPubkey(pubkeyHex: string, label: string): void {
+  if (!/^[0-9a-fA-F]{66}$/.test(pubkeyHex)) {
+    throw new Error(
+      `${label} pubkey must be 33-byte compressed (66 hex chars starting with 02/03)`
+    );
+  }
+
+  if (!pubkeyHex.startsWith('02') && !pubkeyHex.startsWith('03')) {
+    throw new Error(
+      `${label} pubkey must be 33-byte compressed (66 hex chars starting with 02/03)`
+    );
+  }
+
+  const pubkey = hexToBuffer(pubkeyHex);
+  if (!ecc.isPoint(pubkey) || !ecc.isPointCompressed(pubkey)) {
+    throw new Error(`${label} pubkey is not a valid secp256k1 point`);
   }
 }

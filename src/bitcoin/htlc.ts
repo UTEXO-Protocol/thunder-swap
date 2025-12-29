@@ -1,6 +1,11 @@
 import * as bitcoin from 'bitcoinjs-lib';
 import * as ecc from 'tiny-secp256k1';
-import { sha256hex, hexToBuffer } from '../utils/crypto.js';
+import {
+  sha256hex,
+  hexToBuffer,
+  assertValidPaymentHash,
+  assertValidCompressedPubkey
+} from '../utils/crypto.js';
 import { config } from '../config.js';
 
 // Initialize ECC library for bitcoinjs-lib
@@ -30,17 +35,9 @@ export function buildHtlcRedeemScript(
   tLock: number
 ): HTLCBuildResult {
   // Validate inputs
-  if (!/^[0-9a-fA-F]{64}$/.test(H_hex)) {
-    throw new Error('H must be 64-character hex string (32 bytes)');
-  }
-  
-  if (lpPubkeyHex.length !== 66 || (!lpPubkeyHex.startsWith('02') && !lpPubkeyHex.startsWith('03'))) {
-    throw new Error('LP pubkey must be 33-byte compressed (66 hex chars starting with 02/03)');
-  }
-  
-  if (userPubkeyHex.length !== 66 || (!userPubkeyHex.startsWith('02') && !userPubkeyHex.startsWith('03'))) {
-    throw new Error('User pubkey must be 33-byte compressed (66 hex chars starting with 02/03)');
-  }
+  assertValidPaymentHash(H_hex);
+  assertValidCompressedPubkey(lpPubkeyHex, 'LP');
+  assertValidCompressedPubkey(userPubkeyHex, 'User');
 
   // Convert hex strings to buffers
   const H = hexToBuffer(H_hex);

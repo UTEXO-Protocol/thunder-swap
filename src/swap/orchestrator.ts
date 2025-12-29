@@ -2,24 +2,30 @@ import { rlnClient } from '../rln/client.js';
 import { rpc } from '../bitcoin/rpc.js';
 import { waitForFunding } from '../bitcoin/watch.js';
 import { buildHtlcRedeemScript } from '../bitcoin/htlc.js';
+import { buildP2TRHTLC } from '../bitcoin/htlc_p2tr.js';
 import { claimWithPreimage } from '../bitcoin/claim.js';
 import { buildRefundPsbtBase64 } from '../bitcoin/refund.js';
 import { sha256hex, hexToBuffer } from '../utils/crypto.js';
 import BIP32Factory from 'bip32';
 import * as tools from 'uint8array-tools';
 import * as ecc from 'tiny-secp256k1';
-import { BIP32Interface } from 'bip32';
-
+import { randomBytes } from 'crypto';
+import { persistHodlRecord } from '../utils/store.js';
 import { config } from '../config.js';
 import * as bitcoin from 'bitcoinjs-lib';
-import { Signer, SignerAsync, ECPairInterface, ECPairFactory, ECPairAPI, TinySecp256k1Interface } from 'ecpair';
+import {
+  Signer,
+  SignerAsync,
+  ECPairInterface,
+  ECPairFactory,
+  ECPairAPI,
+  TinySecp256k1Interface
+} from 'ecpair';
 import * as tinysecp from 'tiny-secp256k1';
 
 // Initialize ECC library for bitcoinjs-lib
 bitcoin.initEccLib(tinysecp);
 const ECPair: ECPairAPI = ECPairFactory(tinysecp);
-
-
 
 const network = bitcoin.networks.testnet;
 
@@ -37,7 +43,140 @@ interface SwapResult {
   error?: string;
 }
 
+interface DepositParams {
+  amountSat: number;
+  userRefundPubkeyHex: string;
+}
+
+interface DepositResult {
+  payment_hash: string;
+  preimage: string;
+  payment_secret: string;
+  invoice: string;
+  amount_msat: number;
+  expiry_sec: number;
+  htlc_p2tr_address: string;
+  htlc_p2tr_internal_key_hex: string;
+  t_lock: number;
+  funding: {
+    txid: string;
+    vout: number;
+    value: number;
+  };
+}
+
+type RunDepositDeps = {
+  rlnClient: typeof rlnClient;
+  rpc: typeof rpc;
+  waitForFunding: typeof waitForFunding;
+  buildP2TRHTLC: typeof buildP2TRHTLC;
+  persistHodlRecord: typeof persistHodlRecord;
+  config: typeof config;
+};
+
 /**
+ * User-side flow: create HODL invoice, build HTLC, wait for deposit.
+ */
+export async function runDeposit(
+  { amountSat, userRefundPubkeyHex }: DepositParams,
+  depsOverride: Partial<RunDepositDeps> = {}
+): Promise<DepositResult> {
+  const rln = depsOverride.rlnClient ?? rlnClient;
+  const rpcClient = depsOverride.rpc ?? rpc;
+  const waitFunding = depsOverride.waitForFunding ?? waitForFunding;
+  const buildP2tr = depsOverride.buildP2TRHTLC ?? buildP2TRHTLC;
+  const persist = depsOverride.persistHodlRecord ?? persistHodlRecord;
+  const cfg = depsOverride.config ?? config;
+
+  console.log('Preparing user-side Submarine Swap deposit...\n');
+
+  if (!Number.isFinite(amountSat) || amountSat <= 0) {
+    throw new Error('amountSat must be a positive integer (sats)');
+  }
+  if (amountSat < 330) {
+    throw new Error('amountSat must be at least 330 sats (P2TR dust limit)');
+  }
+  const expirySec = cfg.HODL_EXPIRY_SEC;
+
+  // Ensure on-chain timelock safely outlasts the invoice expiry
+  const BLOCK_TARGET_SEC = 600; // Approx 10 minutes per block
+  const TIMECUSHION_SEC = 3600; // 1 hour buffer to broadcast and confirm claim
+  const estimatedTimelockSec = cfg.LOCKTIME_BLOCKS * BLOCK_TARGET_SEC;
+  if (estimatedTimelockSec <= expirySec + TIMECUSHION_SEC) {
+    throw new Error(
+      'LOCKTIME_BLOCKS is too low for HODL_EXPIRY_SEC. Increase LOCKTIME_BLOCKS or reduce HODL_EXPIRY_SEC.'
+    );
+  }
+
+  if (!cfg.LP_PUBKEY_HEX) {
+    throw new Error(
+      'LP_PUBKEY_HEX is required for HTLC construction. Provide the LP compressed pubkey hex.'
+    );
+  }
+
+  // Step 1: Generate preimage/hash and create HODL invoice
+  const preimage = randomBytes(32).toString('hex');
+  const H = sha256hex(Buffer.from(preimage, 'hex'));
+  const amountMsat = amountSat * 1000;
+
+  console.log('\nStep 1: Creating HODL invoice...');
+  const invoiceResp = await rln.invoiceHodl({
+    payment_hash: H,
+    expiry_sec: expirySec,
+    amt_msat: amountMsat
+  });
+
+  console.log(`   Payment Hash (H): ${H}`);
+  console.log(`   Amount: ${amountSat} sats`);
+  console.log(`   Expiry: ${expirySec} seconds`);
+  console.log(`   Invoice (share with payer): ${invoiceResp.invoice}`);
+
+  await persist({
+    payment_hash: H,
+    preimage,
+    amount_msat: amountMsat,
+    expiry_sec: expirySec,
+    invoice: invoiceResp.invoice,
+    payment_secret: invoiceResp.payment_secret,
+    created_at: Date.now()
+  });
+
+  // Step 2: Build HTLC (P2TR)
+  // Read tip height and set timeout block height
+  const tipHeight = await rpcClient.getBlockCount();
+  const tLock = tipHeight + cfg.LOCKTIME_BLOCKS;
+  console.log(`   Current block height: ${tipHeight}`);
+  console.log(`   Time lock block height: ${tLock}`);
+
+  const lpPubkeyHex = cfg.LP_PUBKEY_HEX;
+  console.log(`   LP Public Key: ${lpPubkeyHex}`);
+
+  console.log('\nStep 2: Building HTLC (P2TR)...');
+  const p2trResult = buildP2tr(H, lpPubkeyHex, userRefundPubkeyHex, tLock);
+  console.log(`   P2TR HTLC Address: ${p2trResult.taproot_address}`);
+  console.log(`   Amount to fund: ${amountSat} sats`);
+
+  // Step 3: Wait for funding transaction confirmation
+  console.log('\nStep 3: Waiting for funding confirmation...');
+  const funding = await waitFunding(p2trResult.taproot_address, cfg.MIN_CONFS);
+  console.log(`   Funding confirmed: ${funding.txid}:${funding.vout} (${funding.value} sats)`);
+
+  return {
+    payment_hash: H,
+    preimage,
+    payment_secret: invoiceResp.payment_secret,
+    invoice: invoiceResp.invoice,
+    amount_msat: amountMsat,
+    expiry_sec: expirySec,
+    htlc_p2tr_address: p2trResult.taproot_address,
+    htlc_p2tr_internal_key_hex: p2trResult.internal_key_hex,
+    t_lock: tLock,
+    funding
+  };
+}
+
+/**
+ * @deprecated Prefer runDeposit (user) + node-side executor split flow.
  * Main swap orchestrator that handles the complete submarine swap flow
  */
 export async function runSwap({
@@ -51,7 +190,7 @@ export async function runSwap({
     // Step 1: Decode RGB-LN invoice to get payment hash and amount
     console.log('Step 1: Decoding RGB-LN invoice...');
     const decodedInvoice = await rlnClient.decode(invoice);
-     // TODO: test data
+    // TODO: test data
     // const decodedInvoice = {
     //   payment_hash: 'f4d376425855e2354bf30e17904f4624f6f9aa297973cca0445cdf4cef718b2a',
     //   amt_msat: 3000000,
@@ -93,14 +232,13 @@ export async function runSwap({
     //   throw new Error(`Invalid LP WIF: ${error}`);
     // }
     // const lpPubkeyHex = tools.toHex(lpKeyPair.publicKey);
-    // console.log(`   LP Public Key: ${lpPubkeyHex}`);  
+    // console.log(`   LP Public Key: ${lpPubkeyHex}`);
     // const network = bitcoin.networks.testnet;
 
     // 1) Your account xprv/tprv from listdescriptors(true)
-   
-    
+
     // 2) Derive to the exact path (example: m/84'/1'/0'/0/1 for your addr)
-    const CHAIN = 0;   // 0 = external, 1 = change
+    const CHAIN = 0; // 0 = external, 1 = change
     const INDEX = 1;
     const bip32 = BIP32Factory(ecc);
 
@@ -108,24 +246,24 @@ export async function runSwap({
     // const child = node.derive(CHAIN).derive(INDEX);
 
     const child = node.derivePath(`m/84'/1'/0'/0/${INDEX}`);
-    console.log('node.derive(CHAIN).derive(INDEX);',tools.toHex(child.publicKey))
-    if (!child.privateKey) throw new Error("No private key (did you use tpub instead of tprv?)");
-    
+    console.log('node.derive(CHAIN).derive(INDEX);', tools.toHex(child.publicKey));
+    if (!child.privateKey) throw new Error('No private key (did you use tpub instead of tprv?)');
+
     // 3) Build ECPair from the raw 32-byte private key
-    console.log(network)
+    console.log(network);
     const keyPair2 = ECPair.fromPrivateKey(child.privateKey, { network, compressed: true });
-    
+
     // Optional: WIF / address check
     const LP_WIF = keyPair2.toWIF();
     // Step 3: Generate LP pubkey from WIF
     let lpKeyPair: ECPairInterface;
     try {
-      lpKeyPair = ECPair.fromWIF(LP_WIF,network);
+      lpKeyPair = ECPair.fromWIF(LP_WIF, network);
     } catch (error) {
       throw new Error(`Invalid LP WIF: ${error}`);
     }
     const lpPubkeyHex = tools.toHex(lpKeyPair.publicKey);
-    console.log(`   LP Public Key: ${lpPubkeyHex}`);  
+    console.log(`   LP Public Key: ${lpPubkeyHex}`);
     // const addr = bitcoin.payments.p2wpkh({ pubkey: keyPair2.publicKey, network }).address;
     // console.log({ wif, addr });
 
@@ -136,7 +274,6 @@ export async function runSwap({
     console.log(`   Amount to fund: ${amount_sat} sats`);
     console.log(`   Redeem Script Hash: ${sha256hex(htlcResult.redeemScript)}`);
 
-    
     // Step 5: Wait for funding transaction confirmation
     console.log('\nStep 5: Waiting for funding confirmation...');
     const funding = await waitForFunding(htlcResult.p2wshAddress, config.MIN_CONFS);
@@ -145,25 +282,25 @@ export async function runSwap({
     // Step 6: Pay RGB-LN invoice
     console.log('\nStep 6: Paying RGB-LN invoice...');
     const paymentResult = await rlnClient.pay(invoice);
-     // TODO: test data
+    // TODO: test data
     // const paymentResult = { status: 'Succeeded' };
 
     if (paymentResult.status === 'Pending') {
       console.log('   Payment initiated, status: Pending');
       console.log('   Polling for payment completion...');
-      
+
       // Poll getPayment until status changes from Pending
       const maxAttempts = 60; // 5 minutes at 5 second intervals
       let finalStatus = 'pending';
       let preimage: string | undefined;
-      
+
       for (let attempt = 0; attempt < maxAttempts; attempt++) {
         try {
           const paymentDetails = await rlnClient.getPayment(H);
           finalStatus = paymentDetails.payment.status;
-          
+
           console.log(`   Attempt ${attempt + 1}/${maxAttempts}: Status = ${finalStatus}`);
-          
+
           if (finalStatus === 'Succeeded') {
             preimage = paymentDetails.payment.preimage;
             console.log(`   Payment succeeded! Preimage: ${preimage}`);
@@ -172,15 +309,15 @@ export async function runSwap({
             console.log('   Payment failed');
             break;
           }
-          
+
           // Wait 5 seconds before next attempt
-          await new Promise(resolve => setTimeout(resolve, 5000));
+          await new Promise((resolve) => setTimeout(resolve, 5000));
         } catch (error: any) {
           console.log(`   Attempt ${attempt + 1} failed: ${error.message}`);
-          await new Promise(resolve => setTimeout(resolve, 5000));
+          await new Promise((resolve) => setTimeout(resolve, 5000));
         }
       }
-      
+
       if (finalStatus === 'Succeeded' && preimage) {
         // Step 7: Verify preimage matches hash
         console.log('\nStep 7: Verifying preimage...');
@@ -202,7 +339,6 @@ export async function runSwap({
 
         console.log(`   Claim transaction broadcast: ${claimResult.txid}`);
         return { success: true, txid: claimResult.txid };
-        
       } else if (finalStatus === 'Failed') {
         // Step 8b: Payment failed - prepare refund PSBT
         console.log('\nStep 8b: Payment failed, preparing refund PSBT...');
@@ -242,19 +378,18 @@ export async function runSwap({
           instructions: refundResult.instructions
         };
       }
-      
     } else if (paymentResult.status === 'Succeeded') {
       // Handle immediate success (fallback for older implementations)
       console.log('   Payment succeeded immediately');
       console.log('   Fetching preimage via getPayment...');
-      
+
       let preimage: string | undefined;
       try {
         const paymentDetails = await rlnClient.getPayment(H);
         preimage = paymentDetails.payment.preimage;
         // TODO: test data
         // preimage = '86a85cd1cb86c51186d190972c9f8413f436911fc0de241b6df20877ebbadecc';
-        
+
         if (!preimage) {
           return { success: false, error: 'Payment succeeded but no preimage available' };
         }
@@ -283,7 +418,6 @@ export async function runSwap({
 
       console.log(`   Claim transaction broadcast: ${claimResult.txid}`);
       return { success: true, txid: claimResult.txid };
-      
     } else {
       // Payment failed immediately
       console.log('\nStep 8b: Payment failed immediately, preparing refund PSBT...');
@@ -304,7 +438,6 @@ export async function runSwap({
         instructions: refundResult.instructions
       };
     }
-
   } catch (error: any) {
     const errorMsg = error.message || String(error);
     console.error(`Swap failed: ${errorMsg}`);
