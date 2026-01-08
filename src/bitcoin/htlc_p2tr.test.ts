@@ -8,10 +8,8 @@ process.env.BITCOIN_RPC_PASS ??= 'pass';
 process.env.NETWORK ??= 'regtest';
 process.env.MIN_CONFS ??= '1';
 process.env.LOCKTIME_BLOCKS ??= '10';
-process.env.LP_ACCOUNT_XPRV ??= 'xprv9s21ZrQH143K3dummy';
-process.env.LP_WIF ??= 'cV1Y5d9x4m5fN8eT7nE4GzK3Z7WQh1GJ9GzqC5x4V7sY2f1aQw12';
+process.env.WIF ??= 'cV1Y5d9x4m5fN8eT7nE4GzK3Z7WQh1GJ9GzqC5x4V7sY2f1aQw12';
 process.env.LP_PUBKEY_HEX ??= '020202020202020202020202020202020202020202020202020202020202020202';
-process.env.LP_CLAIM_ADDRESS ??= 'bcrt1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh';
 process.env.RLN_BASE_URL ??= 'https://example.com';
 
 bitcoin.initEccLib(ecc);

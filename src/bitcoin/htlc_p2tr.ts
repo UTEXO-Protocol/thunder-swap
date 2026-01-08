@@ -1,8 +1,8 @@
 import * as bitcoin from 'bitcoinjs-lib';
 import * as ecc from 'tiny-secp256k1';
 import { hexToBuffer, bufferToHex } from '../utils/crypto.js';
-import { config } from '../config.js';
 import { assertValidPaymentHash, assertValidCompressedPubkey } from '../utils/crypto.js';
+import { getNetwork } from './network.js';
 
 // Initialize ECC library for bitcoinjs-lib
 bitcoin.initEccLib(ecc);
@@ -47,20 +47,6 @@ function toXOnlyPubkey(pubkeyHex: string, label: string): Buffer {
   }
 
   return xOnly;
-}
-
-function getNetwork(): bitcoin.Network {
-  switch (config.NETWORK) {
-    case 'mainnet':
-      return bitcoin.networks.bitcoin;
-    case 'testnet':
-    case 'signet':
-      return bitcoin.networks.testnet;
-    case 'regtest':
-      return bitcoin.networks.regtest;
-    default:
-      throw new Error(`Unsupported network: ${config.NETWORK}`);
-  }
 }
 
 /**

@@ -6,7 +6,9 @@
     "dev": "tsx src/index.ts",
     "start": "node --enable-source-maps dist/index.js",
     "build": "tsc -p tsconfig.json",
-    "test": "tsx src/bitcoin/htlc_p2tr.test.ts && tsx src/swap/runDeposit.test.ts"
+    "derive-keys": "tsx src/bitcoin/derive_keys.ts",
+    "balance": "tsx src/bitcoin/balance.ts",
+    "test": "tsx src/bitcoin/htlc_p2tr.test.ts && tsx src/bitcoin/deposit.test.ts && tsx src/swap/runDeposit.test.ts"
   },
   "dependencies": {
     "axios": "^1.7.2",

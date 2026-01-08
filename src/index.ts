@@ -70,18 +70,17 @@ function validateEnvironment(): void {
 
   // Check required env vars
   try {
+    const role = process.env.CLIENT_ROLE?.toUpperCase();
     console.log(`   Bitcoin RPC: ${config.BITCOIN_RPC_URL}`);
     console.log(`   Network: ${config.NETWORK}`);
-    console.log(`   LP WIF: ${config.LP_WIF.slice(0, 10)}...`);
+    console.log(`   WIF: ${config.WIF.slice(0, 10)}...`);
     if (config.LP_PUBKEY_HEX) {
       console.log(`   LP Pubkey (hex): ${config.LP_PUBKEY_HEX}`);
     }
-    console.log(`   LP Claim: ${config.LP_CLAIM_ADDRESS}`);
     console.log(`   RLN URL: ${config.RLN_BASE_URL}`);
 
-    // Validate WIF format
-    if (!validateWIF(config.LP_WIF)) {
-      throw new Error('LP_WIF is not a valid WIF format');
+    if (!validateWIF(config.WIF)) {
+      throw new Error('WIF is not a valid WIF format');
     }
 
     console.log('   Environment looks good\n');
@@ -119,6 +118,17 @@ async function main(): Promise<void> {
     console.log(`   Payment Secret: ${result.payment_secret}`);
     console.log(`   HTLC (P2TR) Address: ${result.htlc_p2tr_address}`);
     console.log(`   Internal Key (hex): ${result.htlc_p2tr_internal_key_hex}`);
+
+    if (result.deposit.fee_sat > 0) {
+      console.log(`   Fee: ${result.deposit.fee_sat} sats`);
+    }
+    console.log(`   Deposit txid: ${result.deposit.txid}`);
+    if (result.deposit.change_sat > 0) {
+      console.log(
+        `   Change: ${result.deposit.change_sat} sats → ${result.deposit.change_address}`
+      );
+    }
+
     console.log(
       `   Funding: ${result.funding.txid}:${result.funding.vout} (${result.funding.value} sats)`
     );

@@ -59,7 +59,7 @@ export function isValidCompressedPubkey(hex: string): boolean {
 export function validateWIF(wif: string): boolean {
   try {
     // Basic WIF validation - 51 or 52 chars and patterns
-    return /^[5KL][1-9A-HJ-NP-Za-km-z]{50,51}$/.test(wif);
+    return /^[5KLc9][1-9A-HJ-NP-Za-km-z]{50,51}$/.test(wif);
   } catch {
     return false;
   }

@@ -5,29 +5,12 @@ import { buildHtlcRedeemScript } from '../bitcoin/htlc.js';
 import { buildP2TRHTLC } from '../bitcoin/htlc_p2tr.js';
 import { claimWithPreimage } from '../bitcoin/claim.js';
 import { buildRefundPsbtBase64 } from '../bitcoin/refund.js';
+import { sendDepositTransaction } from '../bitcoin/deposit.js';
 import { sha256hex, hexToBuffer } from '../utils/crypto.js';
-import BIP32Factory from 'bip32';
-import * as tools from 'uint8array-tools';
-import * as ecc from 'tiny-secp256k1';
 import { randomBytes } from 'crypto';
 import { persistHodlRecord } from '../utils/store.js';
 import { config } from '../config.js';
-import * as bitcoin from 'bitcoinjs-lib';
-import {
-  Signer,
-  SignerAsync,
-  ECPairInterface,
-  ECPairFactory,
-  ECPairAPI,
-  TinySecp256k1Interface
-} from 'ecpair';
-import * as tinysecp from 'tiny-secp256k1';
-
-// Initialize ECC library for bitcoinjs-lib
-bitcoin.initEccLib(tinysecp);
-const ECPair: ECPairAPI = ECPairFactory(tinysecp);
-
-const network = bitcoin.networks.testnet;
+import { deriveTaprootFromWIF } from '../bitcoin/keys.js';
 
 interface SwapParams {
   invoice: string;
@@ -58,6 +41,14 @@ interface DepositResult {
   htlc_p2tr_address: string;
   htlc_p2tr_internal_key_hex: string;
   t_lock: number;
+  deposit: {
+    fee_sat: number;
+    txid: string;
+    psbt_base64: string;
+    input_count: number;
+    change_sat: number;
+    change_address: string;
+  };
   funding: {
     txid: string;
     vout: number;
@@ -70,6 +61,7 @@ type RunDepositDeps = {
   rpc: typeof rpc;
   waitForFunding: typeof waitForFunding;
   buildP2TRHTLC: typeof buildP2TRHTLC;
+  sendDeposit: typeof sendDepositTransaction;
   persistHodlRecord: typeof persistHodlRecord;
   config: typeof config;
 };
@@ -85,6 +77,7 @@ export async function runDeposit(
   const rpcClient = depsOverride.rpc ?? rpc;
   const waitFunding = depsOverride.waitForFunding ?? waitForFunding;
   const buildP2tr = depsOverride.buildP2TRHTLC ?? buildP2TRHTLC;
+  const sendDeposit = depsOverride.sendDeposit ?? sendDepositTransaction;
   const persist = depsOverride.persistHodlRecord ?? persistHodlRecord;
   const cfg = depsOverride.config ?? config;
 
@@ -156,8 +149,19 @@ export async function runDeposit(
   console.log(`   P2TR HTLC Address: ${p2trResult.taproot_address}`);
   console.log(`   Amount to fund: ${amountSat} sats`);
 
-  // Step 3: Wait for funding transaction confirmation
-  console.log('\nStep 3: Waiting for funding confirmation...');
+  // Step 3: Send deposit to HTLC address
+  console.log('\nStep 3: Sending deposit transaction...');
+  const depositTx = await sendDeposit(p2trResult.taproot_address, amountSat);
+  console.log(`   Deposit transaction broadcast: ${depositTx.txid}`);
+  if (depositTx.fee_sat > 0) {
+    console.log(`   Fee: ${depositTx.fee_sat} sats`);
+  }
+  if (depositTx.change_sat > 0) {
+    console.log(`   Change: ${depositTx.change_sat} sats → ${depositTx.change_address}`);
+  }
+
+  // Step 4: Wait for funding transaction confirmation
+  console.log('\nStep 4: Waiting for funding confirmation...');
   const funding = await waitFunding(p2trResult.taproot_address, cfg.MIN_CONFS);
   console.log(`   Funding confirmed: ${funding.txid}:${funding.vout} (${funding.value} sats)`);
 
@@ -171,12 +175,20 @@ export async function runDeposit(
     htlc_p2tr_address: p2trResult.taproot_address,
     htlc_p2tr_internal_key_hex: p2trResult.internal_key_hex,
     t_lock: tLock,
+    deposit: {
+      fee_sat: depositTx.fee_sat,
+      txid: depositTx.txid,
+      psbt_base64: depositTx.psbt_base64,
+      input_count: depositTx.input_count,
+      change_sat: depositTx.change_sat,
+      change_address: depositTx.change_address
+    },
     funding
   };
 }
 
 /**
- * @deprecated Prefer runDeposit (user) + node-side executor split flow.
+ * @deprecated Prefer runDeposit (user) + operator-side executor split flow.
  * Main swap orchestrator that handles the complete submarine swap flow
  */
 export async function runSwap({
@@ -223,47 +235,12 @@ export async function runSwap({
       throw new Error('Invoice has expired');
     }
 
-    // Step 3: Generate LP pubkey from WIF
-    // console.log('\nStep 3: Preparing LP keys...');
-    // let lpKeyPair: ECPairInterface;
-    // try {
-    //   lpKeyPair = ECPair.fromWIF(config.LP_WIF);
-    // } catch (error) {
-    //   throw new Error(`Invalid LP WIF: ${error}`);
-    // }
-    // const lpPubkeyHex = tools.toHex(lpKeyPair.publicKey);
-    // console.log(`   LP Public Key: ${lpPubkeyHex}`);
-    // const network = bitcoin.networks.testnet;
-
-    // 1) Your account xprv/tprv from listdescriptors(true)
-
-    // 2) Derive to the exact path (example: m/84'/1'/0'/0/1 for your addr)
-    const CHAIN = 0; // 0 = external, 1 = change
-    const INDEX = 1;
-    const bip32 = BIP32Factory(ecc);
-
-    const node = bip32.fromBase58(config.LP_ACCOUNT_XPRV, network);
-    // const child = node.derive(CHAIN).derive(INDEX);
-
-    const child = node.derivePath(`m/84'/1'/0'/0/${INDEX}`);
-    console.log('node.derive(CHAIN).derive(INDEX);', tools.toHex(child.publicKey));
-    if (!child.privateKey) throw new Error('No private key (did you use tpub instead of tprv?)');
-
-    // 3) Build ECPair from the raw 32-byte private key
-    console.log(network);
-    const keyPair2 = ECPair.fromPrivateKey(child.privateKey, { network, compressed: true });
-
-    // Optional: WIF / address check
-    const LP_WIF = keyPair2.toWIF();
-    // Step 3: Generate LP pubkey from WIF
-    let lpKeyPair: ECPairInterface;
-    try {
-      lpKeyPair = ECPair.fromWIF(LP_WIF, network);
-    } catch (error) {
-      throw new Error(`Invalid LP WIF: ${error}`);
-    }
-    const lpPubkeyHex = tools.toHex(lpKeyPair.publicKey);
+    // Step 3: Generate LP pubkey and claim address from role-based WIF
+    const derived = deriveTaprootFromWIF(config.WIF);
+    const lpPubkeyHex = derived.pubkey_hex;
+    const lpClaimAddress = derived.taproot_address;
     console.log(`   LP Public Key: ${lpPubkeyHex}`);
+    console.log(`   LP Claim Address (derived): ${lpClaimAddress}`);
     // const addr = bitcoin.payments.p2wpkh({ pubkey: keyPair2.publicKey, network }).address;
     // console.log({ wif, addr });
 
@@ -333,8 +310,8 @@ export async function runSwap({
           { txid: funding.txid, vout: funding.vout, value: funding.value },
           htlcResult.redeemScript,
           preimage,
-          LP_WIF,
-          config.LP_CLAIM_ADDRESS
+          config.WIF,
+          lpClaimAddress
         );
 
         console.log(`   Claim transaction broadcast: ${claimResult.txid}`);
@@ -412,8 +389,8 @@ export async function runSwap({
         { txid: funding.txid, vout: funding.vout, value: funding.value },
         htlcResult.redeemScript,
         preimage,
-        LP_WIF,
-        config.LP_CLAIM_ADDRESS
+        config.WIF,
+        lpClaimAddress
       );
 
       console.log(`   Claim transaction broadcast: ${claimResult.txid}`);
@@ -445,7 +422,7 @@ export async function runSwap({
     console.error('   - Check NETWORK setting matches your Bitcoin node');
     console.error('   - Verify RLN node is running and API accessible');
     console.error('   - Ensure funding transaction was sent to the correct HTLC address');
-    console.error('   - Check LP_WIF and LP_CLAIM_ADDRESS in environment');
+    console.error('   - Check WIF in environment');
     return { success: false, error: errorMsg };
   }
 }

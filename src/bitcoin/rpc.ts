@@ -2,6 +2,7 @@ import axios from 'axios';
 import * as bitcoin from 'bitcoinjs-lib';
 import { config } from '../config.js';
 import { isValidHex } from '../utils/crypto.js';
+import { getNetwork } from './network.js';
 
 interface RPCResponse<T = any> {
   result: T;
@@ -63,20 +64,6 @@ function assertValidVout(vout: number): void {
   }
 }
 
-function getNetwork(): bitcoin.Network {
-  switch (config.NETWORK) {
-    case 'mainnet':
-      return bitcoin.networks.bitcoin;
-    case 'testnet':
-    case 'signet':
-      return bitcoin.networks.testnet;
-    case 'regtest':
-      return bitcoin.networks.regtest;
-    default:
-      throw new Error(`Unsupported network: ${config.NETWORK}`);
-  }
-}
-
 function normalizeHex(hex: string): string {
   return hex.toLowerCase();
 }
@@ -99,7 +86,7 @@ class BitcoinRPCClientImpl implements BitcoinRPCClient {
   private async rpcCall<T = any>(method: string, params: any[] = [], wallet?: string): Promise<T> {
     // Use wallet-specific endpoint if wallet is specified
     const url = wallet ? `${this.baseUrl}/wallet/${wallet}` : this.baseUrl;
-    
+
     const response = await axios.post<RPCResponse<T>>(
       url,
       {
@@ -117,7 +104,9 @@ class BitcoinRPCClientImpl implements BitcoinRPCClient {
     );
 
     if (response.data.error) {
-      throw new Error(`RPC Error: ${response.data.error.message} (code: ${response.data.error.code})`);
+      throw new Error(
+        `RPC Error: ${response.data.error.message} (code: ${response.data.error.code})`
+      );
     }
 
     return response.data.result;

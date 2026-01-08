@@ -2,16 +2,15 @@ import assert from 'node:assert/strict';
 import type { Config } from '../config.js';
 
 // Minimal env defaults so config parsing succeeds when this file is run directly.
+process.env.CLIENT_ROLE ??= 'USER';
 process.env.BITCOIN_RPC_URL ??= 'http://127.0.0.1:18443';
 process.env.BITCOIN_RPC_USER ??= 'user';
 process.env.BITCOIN_RPC_PASS ??= 'pass';
 process.env.NETWORK ??= 'regtest';
 process.env.MIN_CONFS ??= '1';
 process.env.LOCKTIME_BLOCKS ??= '6';
-process.env.LP_ACCOUNT_XPRV ??= 'xprv9s21ZrQH143K3dummy';
-process.env.LP_WIF ??= 'cV1Y5d9x4m5fN8eT7nE4GzK3Z7WQh1GJ9GzqC5x4V7sY2f1aQw12';
+process.env.WIF ??= 'cV1Y5d9x4m5fN8eT7nE4GzK3Z7WQh1GJ9GzqC5x4V7sY2f1aQw12';
 process.env.LP_PUBKEY_HEX ??= '020202020202020202020202020202020202020202020202020202020202020202';
-process.env.LP_CLAIM_ADDRESS ??= 'bcrt1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh';
 process.env.RLN_BASE_URL ??= 'https://example.com';
 
 type TestCase = { name: string; run: () => Promise<void> | void };
@@ -49,6 +48,9 @@ const tests: TestCase[] = [
               }
             } as any,
             rpc: { getBlockCount: async () => 0 } as any,
+            sendDeposit: async () => {
+              throw new Error('should not be called');
+            },
             waitForFunding: async () => {
               throw new Error('should not be called');
             },
@@ -94,6 +96,18 @@ const tests: TestCase[] = [
             internal_key_hex: '11'.repeat(32)
           };
         },
+        sendDeposit: async (address: string, amountSat: number) => {
+          calls.sendDeposit = { address, amountSat };
+          return {
+            txid: 'deposittx',
+            hex: '00',
+            psbt_base64: 'cHNidP8BAFICAAAA',
+            fee_sat: 50,
+            input_count: 1,
+            change_sat: 250,
+            change_address: 'bcrt1qchangeaddr'
+          };
+        },
         waitForFunding: async (address: string, minConfs?: number) => {
           calls.waitForFunding = { address, minConfs };
           return { txid: 'fundtx', vout: 0, value: 12345 };
@@ -119,12 +133,19 @@ const tests: TestCase[] = [
       assert.equal(result.htlc_p2tr_internal_key_hex, '11'.repeat(32));
       assert.equal(result.t_lock, 5000 + 300);
       assert.deepEqual(result.funding, { txid: 'fundtx', vout: 0, value: 12345 });
+      assert.equal(result.deposit.txid, 'deposittx');
+      assert.equal(result.deposit.psbt_base64, 'cHNidP8BAFICAAAA');
+      assert.equal(result.deposit.input_count, 1);
+      assert.equal(result.deposit.change_sat, 250);
+      assert.equal(result.deposit.change_address, 'bcrt1qchangeaddr');
 
       // Check dependency calls for UX clarity
       assert.equal(calls.invoiceHodl.amt_msat, 1500 * 1000);
       assert.equal(calls.buildP2TRHTLC.lp, cfg.LP_PUBKEY_HEX);
       assert.equal(calls.buildP2TRHTLC.user, '02aa'.padEnd(66, 'b'));
       assert.equal(calls.buildP2TRHTLC.tLock, 5000 + 300);
+      assert.equal(calls.sendDeposit.address, 'bcrt1htlcaddress');
+      assert.equal(calls.sendDeposit.amountSat, 1500);
       assert.equal(calls.waitForFunding.minConfs, 2);
       assert.equal(calls.persistHodlRecord.payment_hash, result.payment_hash);
       assert.ok(calls.getBlockCount);
