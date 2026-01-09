@@ -87,6 +87,13 @@ npm run balance
 ```
 Shows both user Taproot and user P2WPKH balances (from the same WIF) plus LP Taproot.
 
+Send funds using the same keys (builds and signs locally):
+
+```bash
+# Send 10000 sats from USER or LP (if LP_WIF is present in .env.lp) to some address
+npm run balance -- sendbtc <user/lp> <toAddress> <sats>
+```
+
 ### 3. Start RGB-LN Node
 
 RGB Lightning Node must be accessible at `RLN_BASE_URL` with the following endpoints:

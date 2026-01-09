@@ -4,6 +4,7 @@ import * as bitcoin from 'bitcoinjs-lib';
 import * as tinysecp from 'tiny-secp256k1';
 import { ECPairFactory, ECPairAPI } from 'ecpair';
 import { getNetwork } from './network.js';
+import { DUST_LIMIT_SAT, SpendableUtxo, btcToSat, selectUtxosP2TR } from './utxo_utils.js';
 
 bitcoin.initEccLib(tinysecp);
 const ECPair: ECPairAPI = ECPairFactory(tinysecp);
@@ -18,62 +19,6 @@ export interface DepositSendResult {
   change_address: string;
 }
 
-type SpendableUtxo = {
-  txid: string;
-  vout: number;
-  value_sat: number;
-  script_pubkey_hex: string;
-};
-
-const SATS_PER_BTC = 100_000_000;
-const DUST_LIMIT_SAT = 330;
-const TX_OVERHEAD_VBYTES = 10;
-const P2TR_INPUT_VBYTES = 58;
-const P2TR_OUTPUT_VBYTES = 43;
-
-function btcToSat(amountBtc: number | undefined): number {
-  if (!Number.isFinite(amountBtc)) {
-    return 0;
-  }
-
-  return Math.round((amountBtc as number) * SATS_PER_BTC);
-}
-
-function estimateFeeSat(inputCount: number, outputCount: number, feeRateSatPerVb: number): number {
-  const vbytes =
-    TX_OVERHEAD_VBYTES + inputCount * P2TR_INPUT_VBYTES + outputCount * P2TR_OUTPUT_VBYTES;
-  return Math.ceil(vbytes * feeRateSatPerVb);
-}
-
-function selectUtxos(
-  utxos: SpendableUtxo[],
-  amountSat: number,
-  feeRateSatPerVb: number
-): { selected: SpendableUtxo[]; fee_sat: number; change_sat: number } {
-  const sorted = [...utxos].sort((a, b) => b.value_sat - a.value_sat);
-  const selected: SpendableUtxo[] = [];
-  let total = 0;
-
-  for (const utxo of sorted) {
-    selected.push(utxo);
-    total += utxo.value_sat;
-
-    const feeTwoOutputs = estimateFeeSat(selected.length, 2, feeRateSatPerVb);
-    const changeTwo = total - amountSat - feeTwoOutputs;
-    if (changeTwo >= DUST_LIMIT_SAT) {
-      return { selected, fee_sat: feeTwoOutputs, change_sat: changeTwo };
-    }
-
-    const feeOneOutput = estimateFeeSat(selected.length, 1, feeRateSatPerVb);
-    const changeOne = total - amountSat - feeOneOutput;
-    if (changeOne >= 0) {
-      return { selected, fee_sat: feeOneOutput, change_sat: 0 };
-    }
-  }
-
-  throw new Error('Insufficient UTXOs to fund deposit with current fee rate');
-}
-
 async function fetchUtxosForAddress(address: string): Promise<SpendableUtxo[]> {
   const result = await rpc.scanTxOutSet(address);
   const unspents = (result.unspents || []) as Array<{
@@ -86,7 +31,8 @@ async function fetchUtxosForAddress(address: string): Promise<SpendableUtxo[]> {
   return unspents.map((utxo) => ({
     txid: utxo.txid,
     vout: utxo.vout,
-    value_sat: btcToSat(utxo.amount),
+    valueSat: btcToSat(utxo.amount),
+    scriptHex: utxo.scriptPubKey,
     script_pubkey_hex: utxo.scriptPubKey
   }));
 }
@@ -125,14 +71,16 @@ export async function sendDepositTransaction(
 
   const expectedScriptPubkey = userPayment.output.toString('hex');
   const utxos = (await fetchUtxosForAddress(userPayment.address)).filter(
-    (utxo) => utxo.script_pubkey_hex.toLowerCase() === expectedScriptPubkey.toLowerCase()
+    (utxo): utxo is SpendableUtxo & { script_pubkey_hex: string } =>
+      utxo.script_pubkey_hex !== undefined &&
+      utxo.script_pubkey_hex.toLowerCase() === expectedScriptPubkey.toLowerCase()
   );
 
   if (utxos.length === 0) {
     throw new Error('No UTXOs found for the taproot address derived from WIF');
   }
 
-  const selection = selectUtxos(utxos, amountSat, config.FEE_RATE_SAT_PER_VB);
+  const selection = selectUtxosP2TR(utxos, amountSat);
 
   const psbt = new bitcoin.Psbt({ network });
   for (const utxo of selection.selected) {
@@ -141,15 +89,15 @@ export async function sendDepositTransaction(
       index: utxo.vout,
       witnessUtxo: {
         script: userPayment.output,
-        value: utxo.value_sat
+        value: utxo.valueSat
       },
       tapInternalKey: xOnlyPubkey
     });
   }
 
   psbt.addOutput({ address, value: amountSat });
-  if (selection.change_sat >= DUST_LIMIT_SAT) {
-    psbt.addOutput({ address: userPayment.address, value: selection.change_sat });
+  if (selection.changeSat >= DUST_LIMIT_SAT) {
+    psbt.addOutput({ address: userPayment.address, value: selection.changeSat });
   }
 
   // Taproot key-path signing requires a tweaked signer so that the public key
@@ -171,9 +119,9 @@ export async function sendDepositTransaction(
     txid,
     hex,
     psbt_base64: unsignedPsbtBase64,
-    fee_sat: selection.fee_sat,
+    fee_sat: selection.feeSat,
     input_count: selection.selected.length,
-    change_sat: selection.change_sat,
+    change_sat: selection.changeSat,
     change_address: userPayment.address
   };
 }
