@@ -6,9 +6,10 @@ import { buildP2TRHTLC } from '../bitcoin/htlc_p2tr.js';
 import { claimWithPreimage } from '../bitcoin/claim.js';
 import { buildRefundPsbtBase64 } from '../bitcoin/refund.js';
 import { sendDepositTransaction } from '../bitcoin/deposit.js';
+import { verifyFundingTransaction } from '../bitcoin/verify_p2tr.js';
 import { sha256hex, hexToBuffer } from '../utils/crypto.js';
 import { randomBytes } from 'crypto';
-import { persistHodlRecord } from '../utils/store.js';
+import { getHodlRecord, persistHodlRecord } from '../utils/store.js';
 import { config } from '../config.js';
 import { deriveTaprootFromWIF } from '../bitcoin/keys.js';
 
@@ -56,6 +57,31 @@ interface DepositResult {
   };
 }
 
+interface UserSettleParams {
+  paymentHash: string;
+  maxAttempts?: number;
+  pollIntervalMs?: number;
+}
+
+interface UserSettleResult {
+  payment_hash: string;
+  settled: boolean;
+  status: 'Pending' | 'Succeeded' | 'Failed' | 'Timeout';
+}
+
+interface LpOperatorParams {
+  invoice: string;
+  fundingTxid: string;
+  fundingVout: number;
+  userRefundPubkeyHex: string;
+}
+
+interface LpOperatorResult {
+  payment_hash: string;
+  status: 'Succeeded' | 'Failed' | 'Timeout';
+  claim_txid?: string;
+}
+
 type RunDepositDeps = {
   rlnClient: typeof rlnClient;
   rpc: typeof rpc;
@@ -63,6 +89,17 @@ type RunDepositDeps = {
   buildP2TRHTLC: typeof buildP2TRHTLC;
   sendDeposit: typeof sendDepositTransaction;
   persistHodlRecord: typeof persistHodlRecord;
+  config: typeof config;
+};
+
+type RunUserSettleDeps = {
+  rlnClient: typeof rlnClient;
+  getHodlRecord: typeof getHodlRecord;
+};
+
+type RunLpOperatorDeps = {
+  rlnClient: typeof rlnClient;
+  verifyFundingTransaction: typeof verifyFundingTransaction;
   config: typeof config;
 };
 
@@ -185,6 +222,136 @@ export async function runDeposit(
     },
     funding
   };
+}
+
+/**
+ * User-side flow: wait for claimable HTLC, then settle HODL invoice.
+ */
+export async function runUserSettleHodlInvoice(
+  { paymentHash, maxAttempts = 120, pollIntervalMs = 5000 }: UserSettleParams,
+  depsOverride: Partial<RunUserSettleDeps> = {}
+): Promise<UserSettleResult> {
+  const rln = depsOverride.rlnClient ?? rlnClient;
+  const loadHodlRecord = depsOverride.getHodlRecord ?? getHodlRecord;
+
+  const record = await loadHodlRecord(paymentHash);
+  if (!record) {
+    throw new Error(`No HODL record found for payment hash: ${paymentHash}`);
+  }
+
+  console.log('Waiting for claimable HTLC on user-side invoice...');
+
+  let status: UserSettleResult['status'] = 'Timeout';
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      const paymentDetails = await rln.getPayment(paymentHash);
+      if (!paymentDetails.payment.inbound) {
+        throw new Error('Payment is outbound; check payment hash and role');
+      }
+
+      status = paymentDetails.payment.status as UserSettleResult['status'];
+      console.log(`   Attempt ${attempt + 1}/${maxAttempts}: Status = ${status}`);
+
+      if (status === 'Pending' || status === 'Succeeded' || status === 'Failed') {
+        break;
+      }
+    } catch (error: any) {
+      console.log(`   Attempt ${attempt + 1} failed: ${error.message}`);
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+  }
+
+  if (status === 'Failed' || status === 'Timeout') {
+    return { payment_hash: paymentHash, settled: false, status };
+  }
+
+  if (status === 'Succeeded') {
+    return { payment_hash: paymentHash, settled: true, status };
+  }
+
+  if (status !== 'Pending') {
+    return { payment_hash: paymentHash, settled: false, status };
+  }
+
+  console.log('Settling HODL invoice to release preimage...');
+  await rln.invoiceSettle({
+    payment_hash: paymentHash,
+    payment_preimage: record.preimage
+  });
+
+  return { payment_hash: paymentHash, settled: true, status: 'Succeeded' };
+}
+
+/**
+ * LP/operator-side flow: verify HTLC, pay invoice, wait for settlement, claim on-chain.
+ */
+export async function runLpOperatorFlow(
+  { invoice, fundingTxid, fundingVout, userRefundPubkeyHex }: LpOperatorParams,
+  depsOverride: Partial<RunLpOperatorDeps> = {}
+): Promise<LpOperatorResult> {
+  const rln = depsOverride.rlnClient ?? rlnClient;
+  const verifyFunding = depsOverride.verifyFundingTransaction ?? verifyFundingTransaction;
+  const cfg = depsOverride.config ?? config;
+
+  // Step 1: Decode invoice to get payment hash and amount.
+  const decoded = await rln.decode(invoice);
+  const paymentHash = decoded.payment_hash;
+  const amountMsat = decoded.amt_msat;
+
+  if (!cfg.LP_PUBKEY_HEX) {
+    throw new Error('LP_PUBKEY_HEX is required to verify the HTLC');
+  }
+
+  // Step 2: Verify HTLC funding output (P2TR).
+  const tLock = (await rpc.getBlockCount()) + cfg.LOCKTIME_BLOCKS;
+  const template = {
+    payment_hash: paymentHash,
+    lp_pubkey: cfg.LP_PUBKEY_HEX,
+    user_pubkey: userRefundPubkeyHex,
+    cltv_expiry: tLock
+  };
+  await verifyFunding(
+    { txid: fundingTxid, vout: fundingVout },
+    template,
+    amountMsat,
+    cfg.MIN_CONFS
+  );
+
+  // Step 3: Send payment.
+  const payResult = await rln.pay(invoice);
+  if (payResult.status === 'Failed') {
+    return { payment_hash: paymentHash, status: 'Failed' };
+  }
+
+  // Step 4: Wait until payment is settled.
+  const maxAttempts = 120;
+  let finalStatus: LpOperatorResult['status'] = 'Timeout';
+  let preimage: string | undefined;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const paymentDetails = await rln.getPayment(paymentHash);
+    finalStatus = paymentDetails.payment.status as LpOperatorResult['status'];
+    console.log(`   Attempt ${attempt + 1}/${maxAttempts}: Status = ${finalStatus}`);
+
+    if (finalStatus === 'Succeeded' || finalStatus === 'Failed') {
+      preimage = paymentDetails.payment.preimage;
+      break;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+  }
+
+  if (finalStatus !== 'Succeeded') {
+    return { payment_hash: paymentHash, status: finalStatus };
+  }
+
+  if (!preimage) {
+    throw new Error('Payment succeeded but no preimage is available for on-chain claim');
+  }
+
+  // Step 5: Claim HTLC on-chain.
+  // TODO: implement a P2TR claim path; claimWithPreimage currently targets the legacy P2WSH flow.
+  throw new Error('P2TR claim flow is not implemented yet for operator-side execution');
 }
 
 /**
