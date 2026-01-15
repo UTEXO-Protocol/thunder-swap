@@ -4,7 +4,14 @@ import { rpc } from './rpc.js';
 import { config } from '../config.js';
 import { hexToBuffer, sha256hex } from '../utils/crypto.js';
 import * as tinysecp from 'tiny-secp256k1';
-import { Signer, SignerAsync, ECPairInterface, ECPairFactory, ECPairAPI, TinySecp256k1Interface } from 'ecpair';
+import {
+  Signer,
+  SignerAsync,
+  ECPairInterface,
+  ECPairFactory,
+  ECPairAPI,
+  TinySecp256k1Interface
+} from 'ecpair';
 
 // Initialize ECC library for bitcoinjs-lib
 bitcoin.initEccLib(ecc);
@@ -36,16 +43,16 @@ export async function claimWithPreimage(
   if (!preimageHex.match(/^[0-9a-fA-F]*$/) || preimageHex.length === 0) {
     throw new Error('Preimage must be valid hex');
   }
-  
+
   const preimage = hexToBuffer(preimageHex);
   console.log('Preimage length:', preimage.length, 'bytes');
   console.log('Preimage hex:', Buffer.from(preimage).toString('hex'));
-  
+
   // Validate preimage format
   if (preimage.length !== 32) {
     throw new Error(`Invalid preimage length: ${preimage.length} bytes, expected 32`);
   }
-  
+
   const ECPair: ECPairAPI = ECPairFactory(tinysecp);
   // Parse WIF
   let lpKeyPair: ECPairInterface;
@@ -84,13 +91,15 @@ export async function claimWithPreimage(
 
   // Create output to our claim address
   const claimAddress = bitcoin.address.toOutputScript(lpClaimAddress, network);
-  
+
   // Estimate fee
   const estimatedFee = 1000; // 1000 sats fee estimate
   const outputValue = utxo.value - estimatedFee;
-  
+
   if (outputValue <= 1000) {
-    throw new Error(`UTXO value too low: ${utxo.value} sats, need at least ${estimatedFee + 1000} sats`);
+    throw new Error(
+      `UTXO value too low: ${utxo.value} sats, need at least ${estimatedFee + 1000} sats`
+    );
   }
 
   tx.addOutput(claimAddress, outputValue);
@@ -103,34 +112,34 @@ export async function claimWithPreimage(
     utxo.value,
     hashType
   );
-  
+
   // Sign with proper DER encoding
   const signature = lpKeyPair.sign(signatureHash);
   console.log('Signature length:', signature.length);
   console.log('Signature hex:', Buffer.from(signature).toString('hex'));
-  
+
   // Validate DER signature format
   if (signature.length !== 71) {
     console.warn(`Warning: Signature length is ${signature.length}, expected 71 for DER format`);
   }
-  
+
   // Check if signature starts with DER header (0x30)
   if (signature[0] !== 0x30) {
     console.warn('Warning: Signature does not start with DER header (0x30)');
   }
-  
+
   // Ensure signature is DER-encoded (ECPair should do this automatically)
-  
+
   const sigDerPlus = bitcoin.script.signature.encode(Buffer.from(signature), hashType);
   // const signatureWithHashType = Buffer.concat([signature, Buffer.from([hashType])]);
   console.log('Signature with hash type length:', sigDerPlus.length);
-  
+
   // Build witness stack for HTLC claim: [LP_sig, preimage, OP_TRUE, redeemScript]
   const witness: Buffer[] = [
-    sigDerPlus,  // LP signature
-    preimage,               // Secret preimage
-    Buffer.from([1]),       // OP_TRUE for claiming path
-    redeemScript            // Full redeem script
+    sigDerPlus, // LP signature
+    preimage, // Secret preimage
+    Buffer.from([1]), // OP_TRUE for claiming path
+    redeemScript // Full redeem script
   ];
 
   // Set witness on the transaction
@@ -138,13 +147,13 @@ export async function claimWithPreimage(
 
   // Serialize
   const rawTx = tx.toHex();
-  
+
   // Broadcast transaction
   try {
-    console.log('Sending raw transaction...',rawTx);
+    console.log('Sending raw transaction...', rawTx);
     const txid = await rpc.sendRawTransaction(rawTx);
     console.log(`Claim transaction broadcast: ${txid}`);
-    
+
     return {
       txid,
       hex: rawTx

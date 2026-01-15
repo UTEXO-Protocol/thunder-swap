@@ -158,7 +158,7 @@ async function runUserFlow(): Promise<void> {
   console.log('   LP can now fetch submarine data via comm client and proceed to pay & claim.');
 
   console.log('\nStep 6: Waiting for payment confirmation...');
-  await runUserSettleHodlInvoice({paymentHash: result.payment_hash});
+  await runUserSettleHodlInvoice({ paymentHash: result.payment_hash });
 }
 
 async function runLpFlow(): Promise<void> {

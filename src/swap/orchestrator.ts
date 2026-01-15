@@ -371,7 +371,7 @@ export async function runLpOperatorFlow(
 
   // Step 5: Claim HTLC on-chain.
   console.log('\nStep 5: Claiming HTLC on-chain...');
-  
+
   const claimResult = await claimP2trHtlc(
     { txid: fundingTxid, vout: fundingVout, value: fundingInfo.amount_sat },
     paymentHash,

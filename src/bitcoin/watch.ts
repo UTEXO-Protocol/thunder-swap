@@ -12,17 +12,17 @@ interface FundingUTXO {
  * Uses scanTxOutSet to monitor for incoming transactions to the HTLC address
  */
 export async function waitForFunding(
-  address: string, 
+  address: string,
   minConfs: number = config.MIN_CONFS
 ): Promise<FundingUTXO> {
   console.log(`   Waiting for funding at ${address} with ${minConfs} confirmation...`);
-  
+
   // Try scanTxOutSet first
   try {
     const result = await rpc.scanTxOutSet(address);
     if (result.total_amount > 0) {
       console.log(`Found ${result.total_amount} sats at ${address}`);
-      
+
       // For proven UTXOs, we need to get more details
       const utxos = result.unspents || [];
       if (utxos.length > 0) {
@@ -33,7 +33,7 @@ export async function waitForFunding(
             if (txDetails && txDetails.confirmations >= minConfs) {
               const vout = utxo.vout; // This might be vout index
               const value = Math.round(utxo.amount * 100000000); // Convert BTC to sats
-              
+
               return {
                 txid: utxo.txid,
                 vout: vout || 0,
@@ -54,7 +54,7 @@ export async function waitForFunding(
   // Fallback: Use getrawtransaction to check for funding
   // Note: We don't import the HTLC address as it's not owned by our wallet
   console.log('   Using transaction monitoring fallback...');
-  
+
   const maxAttempts = 60; // 60 minutes at 1 minute intervals
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
@@ -62,7 +62,7 @@ export async function waitForFunding(
       // This is a simplified approach - in production you'd want to use
       // a more sophisticated method like watching the mempool or using
       // a block explorer API
-      
+
       // For now, we'll use scanTxOutSet again as it should work for watching
       const result = await rpc.scanTxOutSet(address);
       if (result.total_amount > 0) {
@@ -74,10 +74,10 @@ export async function waitForFunding(
               const txDetails = await rpc.getRawTransaction(utxo.txid, true);
               if (txDetails && txDetails.confirmations >= minConfs) {
                 const value = Math.round(utxo.amount * 100000000); // Convert BTC to sats
-                
+
                 return {
                   txid: utxo.txid,
-                  vout: utxo.vout || 0, 
+                  vout: utxo.vout || 0,
                   value: value
                 };
               }
@@ -93,7 +93,7 @@ export async function waitForFunding(
     }
 
     // Wait before next attempt
-    await new Promise(resolve => setTimeout(resolve, 60000));
+    await new Promise((resolve) => setTimeout(resolve, 60000));
     console.log(`   Polling for funding confirmation (attempt ${attempt + 1}/${maxAttempts})...`);
   }
 

@@ -4,16 +4,16 @@ We're implementing atomic swaps between RGB assets and Lightning payments using 
 
 1. User wants RGB asset in RGB LN channel → LP sends RGB assets
 2. LP builds HTLC script and address P2WSH(htlc_script) then generates an RGB witness invoice where recipientId = beneficiary_from_script_buf(P2WSH(htlc_script)) (custom script_receive mirrors witness_receive but accepts arbitrary ScriptBuf).
-2. LP creates HTLC and generate witness invoice with HTLC to put it in recipientId we added script_receive func that work similar to witness_recive  but allow to pass script_buf (HTLC in our case)
-3. User Pay RGB witness invoice to HTLC address with `witness_data` 
-4. LP pays Lightning invoice → reveals preimage
-5. LP claims RGB assets using preimage from HTLC script we are going to implement it similar to send for destination we are going to use witness rgb invoice that LP should pay from HTLC UTXO
-6. User gets Lightning payment → LP gets RGB assets
-
+3. LP creates HTLC and generate witness invoice with HTLC to put it in recipientId we added script_receive func that work similar to witness_recive but allow to pass script_buf (HTLC in our case)
+4. User Pay RGB witness invoice to HTLC address with `witness_data`
+5. LP pays Lightning invoice → reveals preimage
+6. LP claims RGB assets using preimage from HTLC script we are going to implement it similar to send for destination we are going to use witness rgb invoice that LP should pay from HTLC UTXO
+7. User gets Lightning payment → LP gets RGB assets
 
 ## Flow Example
 
 ### 1. Create Wallet
+
 ```rust
 let wallet_data = WalletData {
     data_dir: "/tmp/rgb_wallet".to_string(),
@@ -32,6 +32,7 @@ let mut wallet = Wallet::new(wallet_data)?;
 ```
 
 ### 2. Create HTLC Script
+
 ```rust
 
  let xpub = Xpub::from_str(&lp_keys.account_xpub_colored) // used also vanila but same result
@@ -41,7 +42,7 @@ let mut wallet = Wallet::new(wallet_data)?;
     let derived_xpub = xpub.derive_pub(&secp, &[
         rgb_lib::bitcoin::bip32::ChildNumber::from_normal_idx(0).unwrap()
     ]).expect("Derivation succeeds");
-    
+
     let lp_pubkey = PublicKey::new(derived_xpub.public_key);
 
 let htlc_script = Builder::new()
@@ -65,9 +66,10 @@ let htlc_address = Address::p2wsh(&htlc_script, network).to_string();
 ```
 
 ### 3. Use script_receive (Custom Function)
+
 ```rust
 // script_receive is a custom function similar to witness_receive
-// but can receive to custom ScriptBuf 
+// but can receive to custom ScriptBuf
   let script_pubkey = if script_buf.is_p2wpkh() || script_buf.is_p2wsh() || script_buf.is_p2tr() {
             script_buf.clone()
         } else {
@@ -90,12 +92,13 @@ let receive_data = wallet.script_receive(
 **Note**: `script_receive` is a custom function that works like `witness_receive` but accepts a `ScriptBuf` parameter for custom Bitcoin scripts (like HTLC contracts).
 
 ### 4. User sends with witness_data
+
 ```rust
 let recipient = Recipient {
     recipient_id: receive_data.recipient_id.clone(),
     assignment: Assignment::Fungible(13),
     witness_data: Some(WitnessData {
-        amount_sat: 1000,  
+        amount_sat: 1000,
         blinding: None,
     }),
     transport_endpoints: receive_data.transport_endpoints.clone(),
@@ -105,45 +108,49 @@ wallet.send(online, recipient_map, true, 2, 1, false)?;
 ```
 
 ## The Problem
+
 After funding confirms, RGB wallet shows the colored allocation attached to that outpoint but reports
 It seems that rgb utxo isnt synced with btc htlc utxo
 When user sends with `witness_data`, the system should:
+
 1. Create Bitcoin transaction to HTLC address (1000 sats)
 2. Update the RGB UTXO to Bitcoin UTXO
 
-
 ## Bitcoin UTXO
+
 There amount is as expected
+
 ```json
 {
   "unspents": [
-            {
-                "txid": "50e45619eaf8aabe9b4fe25309b6095cf57cdf6f7382be2fb819b70eec4f67a9",
-                "vout": 1,
-                "scriptPubKey": "0020f6bb27eee22b269a32f55e9b0a1979bdbe9bc88f854f57fe3799b1de2b58e48c",
-                "desc": "addr(bcrt1q76aj0mhz9vnf5vh4t6ds5xtehklfhjy0s4840l3hnxcau26cujxqpqyp4w)#mh5dkz8g",
-                "amount": 0.00001000,
-                "coinbase": false,
-                "height": 22239
-            }
-        ],
+    {
+      "txid": "50e45619eaf8aabe9b4fe25309b6095cf57cdf6f7382be2fb819b70eec4f67a9",
+      "vout": 1,
+      "scriptPubKey": "0020f6bb27eee22b269a32f55e9b0a1979bdbe9bc88f854f57fe3799b1de2b58e48c",
+      "desc": "addr(bcrt1q76aj0mhz9vnf5vh4t6ds5xtehklfhjy0s4840l3hnxcau26cujxqpqyp4w)#mh5dkz8g",
+      "amount": 0.00001,
+      "coinbase": false,
+      "height": 22239
+    }
+  ]
 }
 ```
 
 The RGB UTXO:
 it expected to be `btc_amount: 1000` and `exists: true`
+
 ```
-Unspent { 
-    utxo: Utxo { 
-        outpoint: Outpoint { txid: "50e45619...", vout: 1 }, 
-        btc_amount: 0,       
-        colorable: true, 
-        exists: false       
-    }, 
-    rgb_allocations: [RgbAllocation { 
-        asset_id: Some("rgb:HCwuw9vr..."), 
-        assignment: Fungible(13), 
-        settled: true 
+Unspent {
+    utxo: Utxo {
+        outpoint: Outpoint { txid: "50e45619...", vout: 1 },
+        btc_amount: 0,
+        colorable: true,
+        exists: false
+    },
+    rgb_allocations: [RgbAllocation {
+        asset_id: Some("rgb:HCwuw9vr..."),
+        assignment: Fungible(13),
+        settled: true
     }]
 }
 ```
@@ -152,4 +159,4 @@ Unspent {
 
 How should rgb work with external HTLC addresses for atomic RGB-LN swaps? The current sync mechanism only looks at wallet-controlled addresses, but HTLC addresses are external P2WSH addresses. Should the sync mechanism be extended to monitor external addresses, or is there a different approach for HTLC integration?
 
-Also how claim can be implemented in RGB context. Should it be similar to send but with but allow custom PSBT input params witness_script etc? 
+Also how claim can be implemented in RGB context. Should it be similar to send but with but allow custom PSBT input params witness_script etc?

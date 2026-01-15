@@ -23,7 +23,7 @@ export class RLNClient {
       headers: {
         'Content-Type': 'application/json',
         ...(config.RLN_API_KEY && {
-          'Authorization': `Bearer ${config.RLN_API_KEY}`
+          Authorization: `Bearer ${config.RLN_API_KEY}`
         })
       }
     });
@@ -35,7 +35,7 @@ export class RLNClient {
   async decode(invoice: string): Promise<DecodeInvoiceResponse> {
     try {
       console.log('Decoding RGB-LN invoice...');
-      
+
       const response = await this.httpClient.post('/decodelninvoice', {
         invoice
       });
@@ -53,17 +53,19 @@ export class RLNClient {
   async pay(invoice: string): Promise<PayInvoiceResponse> {
     try {
       console.log('Paying RGB-LN invoice...');
-      
+
       const response = await this.httpClient.post('/sendpayment', {
         invoice
       });
 
       const result = response.data;
       console.log('PayInvoiceResponse', result);
-      
+
       if (result.status === 'Pending') {
         console.warn('WARNING: Payment succeeded but no preimage returned by RGB-LN node');
-        console.warn('You may need to update your RGB-LN implementation to include preimage in payment response');
+        console.warn(
+          'You may need to update your RGB-LN implementation to include preimage in payment response'
+        );
       }
 
       return result;
@@ -79,7 +81,7 @@ export class RLNClient {
   async getPayment(paymentHash: string): Promise<GetPaymentResponse> {
     try {
       console.log(`   Getting payment details for hash: ${paymentHash}...\n`);
-      
+
       const response = await this.httpClient.post('/getpayment', {
         payment_hash: paymentHash
       });
@@ -87,7 +89,8 @@ export class RLNClient {
       console.log('GetPaymentResponse', response.data);
       return response.data;
     } catch (error: any) {
-      const errorMsg = error?.response?.data?.error || error?.message || 'Failed to get payment details';
+      const errorMsg =
+        error?.response?.data?.error || error?.message || 'Failed to get payment details';
       throw new Error(`RLN getPayment error: ${errorMsg}`);
     }
   }

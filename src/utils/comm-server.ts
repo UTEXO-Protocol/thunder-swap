@@ -52,7 +52,9 @@ export function startCommServer(): Promise<void> {
 
   return new Promise((resolve) => {
     server.listen(PORT, () => {
-      console.log(`📡 USER comm server running on http://localhost:${PORT}/submarine (LP will connect via comm client)\n`);
+      console.log(
+        `📡 USER comm server running on http://localhost:${PORT}/submarine (LP will connect via comm client)\n`
+      );
       resolve();
     });
   });

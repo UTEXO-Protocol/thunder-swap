@@ -46,6 +46,7 @@ Set `CLIENT_ROLE` in `.env`:
 **Note:** The `run-user.sh` and `run-lp.sh` scripts automatically create `.env`, `.env.user`, and `.env.lp` from their example files if they don't already exist.
 
 **Shared defaults:**
+
 ```bash
 BITCOIN_RPC_URL=http://127.0.0.1:18443
 BITCOIN_RPC_USER=rpcuser
@@ -59,6 +60,7 @@ LP_PUBKEY_HEX=03...  # Compressed pubkey (33 bytes hex)
 ```
 
 **Role-specific env overlay:**
+
 ```bash
 # RGB-LN Node
 RLN_BASE_URL=http://localhost:8080
@@ -83,11 +85,13 @@ The USER and LP clients connect to their respective RGB Lightning Nodes via `RLN
 To run both USER and LP clients simultaneously (two instances), use the provided scripts:
 
 **Terminal 1 (LP):**
+
 ```bash
 ./run-lp.sh
 ```
 
 **Terminal 2 (USER):**
+
 ```bash
 ./run-user.sh
 ```
@@ -95,19 +99,19 @@ To run both USER and LP clients simultaneously (two instances), use the provided
 **Client Communication:** (TODO-comms: improve client-to-client comms).
 
 Share invoice and deposit txid:
-- USER creates HODL invoice and HTLC deposit, 
-then shares:
+
+- USER creates HODL invoice and HTLC deposit, then shares:
   - Invoice (encoded invoice string)
-  - Deposit txid (Bitcoin transaction ID and vout 
-sending funds into the HTCL address)
-- LP receives these and executes payment/claim 
-flow
+  - Deposit txid (Bitcoin transaction ID and vout sending funds into the HTCL address)
+- LP receives these and executes payment/claim flow
 
 Built-in minimal comms (HTTP, no extra deps):
+
 - USER starts a tiny HTTP server on `CLIENT_COMM_PORT` (default `9999`) and publishes submarine data (invoice, funding txid/vout, user refund pubkey).
 - LP polls `USER_COMM_URL` (default `http://localhost:9999/submarine`) to fetch that data and run the operator flow.
 
 Env variables:
+
 - `.env.user`: `CLIENT_COMM_PORT=9999`
 - `.env.lp`: `USER_COMM_URL=http://localhost:9999`
 
@@ -172,6 +176,7 @@ The USER-side flow persists a `HodlRecord` to:
 The preimage is required later to claim the HTLC once the payment succeeds.
 
 TODO: Improve persistence to support recovery, retries, and multi-swap bookkeeping:
+
 - Extend `HodlRecord` with `funding_txid`, `funding_vout`, `t_lock`, `user_pubkey`, `lp_pubkey`, `status`.
 - Add encryption at rest and explicit backup/restore flow.
 - Add index/list endpoints for operator and user recovery tools.
@@ -286,6 +291,7 @@ Check current Taproot balances for both roles (LP from `LP_PUBKEY_HEX`, user fro
 ```bash
 npm run balance
 ```
+
 Shows both user Taproot and user P2WPKH balances (from the same WIF) plus LP Taproot.
 
 Send funds using the same keys (builds and signs locally):

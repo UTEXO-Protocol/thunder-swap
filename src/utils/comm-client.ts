@@ -13,9 +13,7 @@ export interface SubmarineData {
 const USER_COMM_URL = config.USER_COMM_URL ?? 'http://localhost:9999';
 
 export async function fetchSubmarineData(): Promise<SubmarineData> {
-  const response = await axios.get<SubmarineData | { error: string }>(
-    `${USER_COMM_URL}/submarine`
-  );
+  const response = await axios.get<SubmarineData | { error: string }>(`${USER_COMM_URL}/submarine`);
   const data = response.data as any;
   if (data?.error) {
     throw new Error(data.error);

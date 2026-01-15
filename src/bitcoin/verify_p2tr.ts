@@ -1,17 +1,17 @@
-import { rpc } from "./rpc.js";
-import { config } from "../config.js";
+import { rpc } from './rpc.js';
+import { config } from '../config.js';
 import {
   P2TRHTLCTemplate,
   buildClaimTapscript,
   buildRefundTapscript,
-  reconstructP2TRScriptPubKey,
-} from "./htlc_p2tr.js";
+  reconstructP2TRScriptPubKey
+} from './htlc_p2tr.js';
 import {
   hexToBuffer,
   bufferToHex,
   assertValidCompressedPubkey,
-  getXOnlyHex,
-} from "../utils/crypto.js";
+  getXOnlyHex
+} from '../utils/crypto.js';
 
 export interface FundingTransactionInfo {
   txid: string;
@@ -68,17 +68,15 @@ export async function verifyFundingTransaction(
   minConfs: number = config.MIN_CONFS
 ): Promise<P2TRHTLCIdentification> {
   // Step 0: Basic template sanity checks (compressed pubkeys)
-  assertValidCompressedPubkey(template.lp_pubkey, "LP");
-  assertValidCompressedPubkey(template.user_pubkey, "User");
+  assertValidCompressedPubkey(template.lp_pubkey, 'LP');
+  assertValidCompressedPubkey(template.user_pubkey, 'User');
 
   // Step 1: Fetch transaction from blockchain
   let txDetails;
   try {
     txDetails = await rpc.getRawTransaction(fundingInfo.txid, true);
   } catch (error) {
-    throw new Error(
-      `Failed to fetch transaction ${fundingInfo.txid}: ${error}`
-    );
+    throw new Error(`Failed to fetch transaction ${fundingInfo.txid}: ${error}`);
   }
 
   // Step 2: Verify transaction is confirmed
@@ -91,18 +89,12 @@ export async function verifyFundingTransaction(
 
   // Step 3: Verify template parameters are valid
   // Build expected scripts to ensure template is well-formed
-  const expectedClaimScript = buildClaimTapscript(
-    template.payment_hash,
-    template.lp_pubkey
-  );
-  const expectedRefundScript = buildRefundTapscript(
-    template.cltv_expiry,
-    template.user_pubkey
-  );
+  const expectedClaimScript = buildClaimTapscript(template.payment_hash, template.lp_pubkey);
+  const expectedRefundScript = buildRefundTapscript(template.cltv_expiry, template.user_pubkey);
 
   // Verify scripts were built successfully (implicitly validates parameters)
   if (expectedClaimScript.length === 0 || expectedRefundScript.length === 0) {
-    throw new Error("Failed to build expected HTLC scripts from template");
+    throw new Error('Failed to build expected HTLC scripts from template');
   }
 
   // Step 3b: Minimal script-path sanity checks (POC)
@@ -113,13 +105,13 @@ export async function verifyFundingTransaction(
   const refundHex = bufferToHex(expectedRefundScript).toLowerCase();
 
   if (!claimHex.includes(paymentHashHex)) {
-    throw new Error("Claim tapscript does not include expected payment hash");
+    throw new Error('Claim tapscript does not include expected payment hash');
   }
   if (!claimHex.includes(lpPubkeyXOnly)) {
-    throw new Error("Claim tapscript does not include expected LP pubkey (x-only)");
+    throw new Error('Claim tapscript does not include expected LP pubkey (x-only)');
   }
   if (!refundHex.includes(userPubkeyXOnly)) {
-    throw new Error("Refund tapscript does not include expected user pubkey (x-only)");
+    throw new Error('Refund tapscript does not include expected user pubkey (x-only)');
   }
 
   const expectedScriptPubKey = reconstructExpectedScriptPubKey(template);
@@ -130,7 +122,7 @@ export async function verifyFundingTransaction(
   try {
     output = await rpc.getTransactionOutput(fundingInfo.txid, fundingInfo.vout, {
       expectedScriptPubKeyHex: bufferToHex(expectedScriptPubKey),
-      requireUnspent: true,
+      requireUnspent: true
     });
   } catch (error) {
     throw new Error(
@@ -156,7 +148,7 @@ export async function verifyFundingTransaction(
   // P2TR scriptPubKey format: OP_1 (0x51) || <32-byte x-only pubkey>
   if (scriptPubKey.length !== 34 || scriptPubKey[0] !== 0x51) {
     throw new Error(
-      `Output is not P2TR: expected 34 bytes starting with 0x51, got ${scriptPubKey.length} bytes starting with 0x${scriptPubKey[0].toString(16).padStart(2, "0")}`
+      `Output is not P2TR: expected 34 bytes starting with 0x51, got ${scriptPubKey.length} bytes starting with 0x${scriptPubKey[0].toString(16).padStart(2, '0')}`
     );
   }
 
@@ -172,7 +164,7 @@ export async function verifyFundingTransaction(
   return {
     outpoint: {
       txid: fundingInfo.txid,
-      vout: fundingInfo.vout,
+      vout: fundingInfo.vout
     },
     amount_sat: amountSat,
     confirmations,
@@ -205,7 +197,5 @@ export async function waitForFundingConfirmation(
     }
   }
 
-  throw new Error(
-    `Timeout waiting for transaction ${txid} to reach ${minConfs} confirmations`
-  );
+  throw new Error(`Timeout waiting for transaction ${txid} to reach ${minConfs} confirmations`);
 }
