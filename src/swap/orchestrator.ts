@@ -67,7 +67,7 @@ interface UserSettleParams {
 interface UserSettleResult {
   payment_hash: string;
   settled: boolean;
-  status: 'Pending' | 'Succeeded' | 'Failed' | 'Timeout';
+  status: 'Pending' | 'Claimable' | 'Succeeded' | 'Cancelled' | 'Failed' | 'Timeout';
 }
 
 interface LpOperatorParams {
@@ -80,7 +80,7 @@ interface LpOperatorParams {
 
 interface LpOperatorResult {
   payment_hash: string;
-  status: 'Succeeded' | 'Failed' | 'Timeout';
+  status: 'Pending' | 'Claimable' | 'Succeeded' | 'Cancelled' | 'Failed' | 'Timeout';
   claim_txid?: string;
 }
 
@@ -119,8 +119,6 @@ export async function runDeposit(
   const sendDeposit = depsOverride.sendDeposit ?? sendDepositTransaction;
   const persist = depsOverride.persistHodlRecord ?? persistHodlRecord;
   const cfg = depsOverride.config ?? config;
-
-  console.log('Preparing user-side Submarine Swap deposit...\n');
 
   if (!Number.isFinite(amountSat) || amountSat <= 0) {
     throw new Error('amountSat must be a positive integer (sats)');
@@ -189,9 +187,9 @@ export async function runDeposit(
   console.log(`   Amount to fund: ${amountSat} sats`);
 
   // Step 3: Send deposit to HTLC address
-  console.log('\nStep 3: Sending deposit transaction...');
+  console.log('\nStep 3: Sending on-chain deposit...');
   const depositTx = await sendDeposit(p2trResult.taproot_address, amountSat);
-  console.log(`   Deposit transaction broadcast: ${depositTx.txid}`);
+  console.log(`   Transaction ID: ${depositTx.txid}`);
   if (depositTx.fee_sat > 0) {
     console.log(`   Fee: ${depositTx.fee_sat} sats`);
   }
@@ -241,8 +239,6 @@ export async function runUserSettleHodlInvoice(
     throw new Error(`No HODL record found for payment hash: ${paymentHash}`);
   }
 
-  console.log('Waiting for claimable HTLC on user-side invoice...');
-
   let status: UserSettleResult['status'] = 'Timeout';
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
@@ -254,7 +250,12 @@ export async function runUserSettleHodlInvoice(
       status = paymentDetails.payment.status as UserSettleResult['status'];
       console.log(`   Attempt ${attempt + 1}/${maxAttempts}: Status = ${status}`);
 
-      if (status === 'Pending' || status === 'Succeeded' || status === 'Failed') {
+      if (
+        status === 'Claimable' ||
+        status === 'Succeeded' ||
+        status === 'Cancelled' ||
+        status === 'Failed'
+      ) {
         break;
       }
     } catch (error: any) {
@@ -264,7 +265,7 @@ export async function runUserSettleHodlInvoice(
     await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
   }
 
-  if (status === 'Failed' || status === 'Timeout') {
+  if (status === 'Cancelled' || status === 'Failed' || status === 'Timeout') {
     return { payment_hash: paymentHash, settled: false, status };
   }
 
@@ -272,11 +273,10 @@ export async function runUserSettleHodlInvoice(
     return { payment_hash: paymentHash, settled: true, status };
   }
 
-  if (status !== 'Pending') {
+  if (status !== 'Claimable') {
     return { payment_hash: paymentHash, settled: false, status };
   }
 
-  console.log('Settling HODL invoice to release preimage...');
   await rln.invoiceSettle({
     payment_hash: paymentHash,
     payment_preimage: record.preimage
@@ -351,7 +351,7 @@ export async function runLpOperatorFlow(
     finalStatus = paymentDetails.payment.status as LpOperatorResult['status'];
     console.log(`   Attempt ${attempt + 1}/${maxAttempts}: Status = ${finalStatus}`);
 
-    if (finalStatus === 'Succeeded' || finalStatus === 'Failed') {
+    if (finalStatus === 'Succeeded' || finalStatus === 'Cancelled' || finalStatus === 'Failed') {
       preimage = paymentDetails.payment.preimage;
       break;
     }

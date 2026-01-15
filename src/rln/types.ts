@@ -25,7 +25,7 @@ export interface PaymentDetails {
   asset_id: string;
   payment_hash: string;
   inbound: boolean;
-  status: 'Pending' | 'Succeeded' | 'Failed';
+  status: 'Pending' | 'Claimable' | 'Succeeded' | 'Cancelled' | 'Failed';
   created_at: number;
   updated_at: number;
   payee_pubkey: string;
