@@ -33,12 +33,18 @@ const server = http.createServer((req, res) => {
   }
 
   if (req.method === 'GET' && req.url === '/submarine') {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(
-      JSON.stringify(
-        submarineData ?? { error: 'No submarine data available yet; waiting for USER publish.' }
-      )
-    );
+    if (!submarineData) {
+      // Explicitly signal "not ready" without returning an error payload to the client.
+      res.writeHead(204, {
+        'Content-Type': 'application/json',
+        'Cache-Control': 'no-store'
+      });
+      res.end();
+      return;
+    }
+
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    res.end(JSON.stringify(submarineData));
     return;
   }
 
