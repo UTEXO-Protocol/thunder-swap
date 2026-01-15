@@ -15,7 +15,7 @@ export async function waitForFunding(
   address: string, 
   minConfs: number = config.MIN_CONFS
 ): Promise<FundingUTXO> {
-  console.log(`Waiting for funding at ${address} with ${minConfs} confirmations...`);
+  console.log(`   Waiting for funding at ${address} with ${minConfs} confirmation...`);
   
   // Try scanTxOutSet first
   try {
@@ -53,7 +53,7 @@ export async function waitForFunding(
 
   // Fallback: Use getrawtransaction to check for funding
   // Note: We don't import the HTLC address as it's not owned by our wallet
-  console.log('Using transaction monitoring fallback...');
+  console.log('   Using transaction monitoring fallback...');
   
   const maxAttempts = 60; // 60 minutes at 1 minute intervals
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
@@ -94,7 +94,7 @@ export async function waitForFunding(
 
     // Wait before next attempt
     await new Promise(resolve => setTimeout(resolve, 60000));
-    console.log(`Polling for funding confirmation (attempt ${attempt + 1}/${maxAttempts})...`);
+    console.log(`   Polling for funding confirmation (attempt ${attempt + 1}/${maxAttempts})...`);
   }
 
   throw new Error(`Timeout waiting for funding confirmation at ${address}`);

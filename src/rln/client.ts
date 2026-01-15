@@ -78,7 +78,7 @@ export class RLNClient {
    */
   async getPayment(paymentHash: string): Promise<GetPaymentResponse> {
     try {
-      console.log(`Getting payment details for hash: ${paymentHash}...`);
+      console.log(`   Getting payment details for hash: ${paymentHash}...\n`);
       
       const response = await this.httpClient.post('/getpayment', {
         payment_hash: paymentHash
@@ -98,8 +98,6 @@ export class RLNClient {
    */
   async invoiceHodl(request: InvoiceHodlRequest): Promise<InvoiceHodlResponse> {
     try {
-      console.log('Creating HODL invoice...');
-
       const response = await this.httpClient.post('/invoice/hodl', request);
 
       console.log('InvoiceHodlResponse', response.data);
@@ -116,16 +114,16 @@ export class RLNClient {
    */
   async invoiceSettle(request: InvoiceSettleRequest): Promise<EmptyResponse> {
     try {
-      console.log(`Settling HODL invoice for payment hash: ${request.payment_hash}...`);
+      console.log(`   Settling HODL invoice for payment hash: ${request.payment_hash}...`);
 
       const response = await this.httpClient.post('/invoice/settle', request);
 
-      console.log('Invoice settled successfully');
+      console.log('   Invoice settled successfully');
       return response.data;
     } catch (error: any) {
       const errorMsg =
         error?.response?.data?.error || error?.message || 'Failed to settle HODL invoice';
-      throw new Error(`RLN invoiceSettle error: ${errorMsg}`);
+      throw new Error(`RLN invoice settlement error: ${errorMsg}`);
     }
   }
 
