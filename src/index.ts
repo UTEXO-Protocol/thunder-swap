@@ -1,15 +1,12 @@
 #!/usr/bin/env node
-import { runDeposit } from './swap/orchestrator.js';
-import { isValidCompressedPubkey, validateWIF } from './utils/crypto.js';
-import { config } from './config.js';
+import { runDeposit, runLpOperatorFlow } from './swap/orchestrator.js';
+import { validateWIF, isValidCompressedPubkey } from './utils/crypto.js';
+import { CLIENT_ROLE, config } from './config.js';
 import readline from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
-
-interface ParsedArgs {
-  amountSat: number;
-  userRefundPubkeyHex: string;
-  userRefundAddress: string;
-}
+import { startCommServer, publishSubmarineData } from './utils/comm-server.js';
+import { waitForSubmarineData } from './utils/comm-client.js';
+import { deriveTaprootFromWIF } from './bitcoin/keys.js';
 
 async function promptAmount(): Promise<{ amountSat: number }> {
   const rl = readline.createInterface({ input, output });
@@ -25,6 +22,22 @@ async function promptAmount(): Promise<{ amountSat: number }> {
   return { amountSat };
 }
 
+/**
+ * @deprecated Legacy P2WPKH path - CLI args are deprecated.
+ * Current Taproot flow derives userRefundPubkeyHex from USER WIF via deriveTaprootFromWIF().
+ * This interface is kept for backward compatibility but should not be used.
+ */
+interface ParsedArgs {
+  amountSat: number;
+  userRefundPubkeyHex: string;
+  userRefundAddress: string;
+}
+
+/**
+ * @deprecated Legacy P2WPKH path - CLI args are deprecated.
+ * Current Taproot flow derives userRefundPubkeyHex from USER WIF via deriveTaprootFromWIF().
+ * Use parseAmount() and deriveTaprootFromWIF(config.WIF) instead.
+ */
 async function parseArgs(): Promise<ParsedArgs> {
   const args = process.argv.slice(2);
 
@@ -65,12 +78,17 @@ async function parseArgs(): Promise<ParsedArgs> {
   };
 }
 
+async function parseAmount(): Promise<number> {
+  return (await promptAmount()).amountSat;
+}
+
 function validateEnvironment(): void {
   console.log('🔧 Environment configuration check...');
 
   // Check required env vars
   try {
     const role = process.env.CLIENT_ROLE?.toUpperCase();
+    console.log(`   Client Role: ${role}`);
     console.log(`   Bitcoin RPC: ${config.BITCOIN_RPC_URL}`);
     console.log(`   Network: ${config.NETWORK}`);
     console.log(`   WIF: ${config.WIF.slice(0, 10)}...`);
@@ -91,6 +109,76 @@ function validateEnvironment(): void {
   }
 }
 
+async function runUserFlow(): Promise<void> {
+  startCommServer();
+
+  // Derive user refund pubkey from WIF
+  const derived = deriveTaprootFromWIF(config.WIF);
+  const userRefundPubkeyHex = derived.pubkey_hex;
+
+  // Prompt for swap amount
+  const amountSat = await parseAmount();
+
+  console.log('Swap Parameters:');
+  console.log(`   Amount: ${amountSat} sats`);
+  console.log(`   User Refund Pubkey: ${userRefundPubkeyHex.slice(0, 20)}...`);
+  console.log(`   User Refund Address: ${derived.taproot_address}\n`);
+
+  // User-side deposit flow: create HODL invoice and wait for funding
+  const result = await runDeposit({ amountSat, userRefundPubkeyHex });
+
+  console.log('\n=====================================');
+  console.log('HODL invoice prepared and deposit confirmed.');
+  console.log(`   Invoice: ${result.invoice}`);
+  console.log(`   Payment Hash: ${result.payment_hash}`);
+  console.log(`   Preimage: ${result.preimage}`);
+  console.log(`   Payment Secret: ${result.payment_secret}`);
+  console.log(`   HTLC (P2TR) Address: ${result.htlc_p2tr_address}`);
+  console.log(`   Internal Key (hex): ${result.htlc_p2tr_internal_key_hex}`);
+
+  if (result.deposit.fee_sat > 0) {
+    console.log(`   Fee: ${result.deposit.fee_sat} sats`);
+  }
+  console.log(`   Deposit txid: ${result.deposit.txid}`);
+  if (result.deposit.change_sat > 0) {
+    console.log(`   Change: ${result.deposit.change_sat} sats → ${result.deposit.change_address}`);
+  }
+  console.log(
+    `   Funding: ${result.funding.txid}:${result.funding.vout} (${result.funding.value} sats)`
+  );
+
+  // Publish submarine data for LP to consume
+  publishSubmarineData({
+    invoice: result.invoice,
+    fundingTxid: result.funding.txid,
+    fundingVout: result.funding.vout,
+    userRefundPubkeyHex: userRefundPubkeyHex,
+    paymentHash: result.payment_hash,
+    tLock: result.t_lock // Send the exact timelock USER used when building HTLC
+  });
+  console.log('LP can now fetch submarine data via comm client and proceed to pay/claim.');
+}
+
+async function runLpFlow(): Promise<void> {
+  console.log('Waiting for submarine data from USER...');
+  const submarineData = await waitForSubmarineData();
+
+  console.log('Submarine data received:');
+  console.log(`   Invoice: ${submarineData.invoice}`);
+  console.log(`   Funding: ${submarineData.fundingTxid}:${submarineData.fundingVout}`);
+  console.log(`   User Refund Pubkey: ${submarineData.userRefundPubkeyHex}`);
+
+  const result = await runLpOperatorFlow({
+    invoice: submarineData.invoice,
+    fundingTxid: submarineData.fundingTxid,
+    fundingVout: submarineData.fundingVout,
+    userRefundPubkeyHex: submarineData.userRefundPubkeyHex,
+    tLock: submarineData.tLock // Use USER's exact timelock
+  });
+
+  console.log('LP flow completed:', result);
+}
+
 async function main(): Promise<void> {
   console.log('RGB-LN Submarine Swap POC');
   console.log('=====================================\n');
@@ -99,40 +187,11 @@ async function main(): Promise<void> {
     // Validate environment
     validateEnvironment();
 
-    // Parse command line arguments
-    const args = await parseArgs();
-
-    console.log('Swap Parameters:');
-    console.log(`   Amount: ${args.amountSat} sats`);
-    console.log(`   User Pubkey: ${args.userRefundPubkeyHex.slice(0, 20)}...`);
-    console.log(`   Refund Address: ${args.userRefundAddress}\n`);
-
-    // User-side deposit flow: create HODL invoice and wait for funding
-    const result = await runDeposit(args);
-
-    console.log('\n=====================================');
-    console.log('HODL invoice prepared and deposit confirmed.');
-    console.log(`   Invoice: ${result.invoice}`);
-    console.log(`   Payment Hash: ${result.payment_hash}`);
-    console.log(`   Preimage: ${result.preimage}`);
-    console.log(`   Payment Secret: ${result.payment_secret}`);
-    console.log(`   HTLC (P2TR) Address: ${result.htlc_p2tr_address}`);
-    console.log(`   Internal Key (hex): ${result.htlc_p2tr_internal_key_hex}`);
-
-    if (result.deposit.fee_sat > 0) {
-      console.log(`   Fee: ${result.deposit.fee_sat} sats`);
+    if (CLIENT_ROLE === 'USER') {
+      await runUserFlow();
+    } else {
+      await runLpFlow();
     }
-    console.log(`   Deposit txid: ${result.deposit.txid}`);
-    if (result.deposit.change_sat > 0) {
-      console.log(
-        `   Change: ${result.deposit.change_sat} sats → ${result.deposit.change_address}`
-      );
-    }
-
-    console.log(
-      `   Funding: ${result.funding.txid}:${result.funding.vout} (${result.funding.value} sats)`
-    );
-    console.log('Share invoice with the payer; proceed to node-side execution to pay/claim.');
   } catch (error: any) {
     console.error(`Fatal error: ${error.message}`);
     console.error('   Stack trace:', error.stack);

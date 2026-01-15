@@ -63,7 +63,6 @@ HODL_EXPIRY_SEC=86400 # 1day
 FEE_RATE_SAT_PER_VB=1
 LP_PUBKEY_HEX=03...  # Compressed pubkey (33 bytes hex)
 
-
 # Role-specific env loaded via CLIENT_ROLE overlay
 # RGB-LN Node
 RLN_BASE_URL=http://localhost:8080
@@ -105,18 +104,18 @@ The USER and LP clients connect to their respective RGB Lightning Nodes via `RLN
 - `POST /invoice/settle` - Returns `{}` (empty)
 - `POST /invoice/cancel` - Returns `{}` (empty)
 
-### 4. Running Two Instances (USER and LP)
+### 4. Run Submarine Swap
 
-To run both USER and LP clients simultaneously, use the provided scripts:
+To run both USER and LP clients simultaneously (two instances), use the provided scripts:
 
-**Terminal 1 (USER):**
-```bash
-./run-user.sh
-```
-
-**Terminal 2 (LP):**
+**Terminal 1 (LP):**
 ```bash
 ./run-lp.sh
+```
+
+**Terminal 2 (USER):**
+```bash
+./run-user.sh
 ```
 
 **Client Communication:** (TODO-comms: improve client-to-client comms).
@@ -140,21 +139,6 @@ Env variables:
 
 **Note:** Environment variables override `.env` file values. The scripts set `CLIENT_ROLE` via environment variable, so you can keep a default in `.env` without conflicts.
 
-### 5. Run Swap (HODL Invoice Creation)
-
-Execute with `CLIENT_ROLE` set (in `.env`):
-
-```bash
-npx tsx src/index.ts "<USER_REFUND_PUBKEY_HEX>" "<USER_REFUND_ADDRESS>"
-```
-
-Arguments:
-
-- `USER_REFUND_PUBKEY_HEX`: 33-byte compressed public key (hex)
-- `USER_REFUND_ADDRESS`: Bitcoin refund address
-
-Note: these arguments are deprecated and only apply to the legacy P2WPKH path. The current
-Taproot flow derives the user pubkey and refund address from the USER WIF.
 
 Process:
 
@@ -163,21 +147,6 @@ Process:
 3. Generates 32-byte preimage and SHA256 payment hash
 4. Creates HODL invoice via `/invoice/hodl` (expiry: `HODL_EXPIRY_SEC`)
 5. Persists `payment_hash → {preimage, metadata}` to `hodl_store.json`
-
-### Deposit Flow Summary
-
-1. Set `CLIENT_ROLE` (`LP` or `USER`) in `.env`
-2. Configure shared `.env` (Bitcoin RPC/network) and role overlay (`.env.lp` or `.env.user`)
-3. LP must share `LP_PUBKEY_HEX` in `.env`.
-4. USER funds via locally built PSBT (P2TR), signs with `WIF`, and broadcasts. The unsigned PSBT is included in the deposit result for future external signing.
-
-### Deposit PSBT Flow: Send invoice amount to the P2TR HTLC address
-
-1. Select UTXOs from the USER taproot address derived from `WIF`.
-2. Build an unsigned PSBT using the chosen inputs and the HTLC output (plus change if applicable).
-3. Load the signing key from `WIF`.
-4. Sign the PSBT locally, then finalize it into a raw transaction.
-5. Broadcast the finalized transaction to the Bitcoin network.
 
 ## Protocol Flow
 
@@ -191,21 +160,26 @@ Process:
 6. On success: claim HTLC via preimage revelation
 7. On timeout/failure: generate refund PSBT (requires `tLock` expiry)
 
-## Two-Party Flow (User vs Operator)
+### Two-Party Flow (User vs Operator)
 
 The POC is split into a USER-side deposit flow and an LP/operator-side execution flow.
 
-### USER (runDeposit)
 
-1. Set `CLIENT_ROLE=USER` in `.env` and load `.env.user`.
-2. Run the CLI (legacy args are deprecated; Taproot derives from USER WIF).
-3. The client generates a preimage and creates a HODL invoice via `/invoice/hodl`.
-4. It builds the P2TR HTLC using `LP_PUBKEY_HEX` and funds it from the USER wallet.
-5. It waits for `MIN_CONFS`, then sends the invoice and deposit txid to the operator.
-6. It waits for a claimable event (poll USER RLN for `Pending` inbound payment).
-7. It decides to call `/invoice/settle` or wait for timeout and refund the HTLC.
+#### USER: Run Deposit Flow Summary
 
-### LP/Operator (pay + claim/refund)
+1. Run script `./run-user.sh` and provide submarine swap amount in sats.
+2. The client generates a preimage and creates a HODL invoice via `/invoice/hodl`.
+3. It builds the P2TR HTLC using `LP_PUBKEY_HEX` and funds it from the USER wallet (with locally built P2TR PSBT, signs with `WIF`, and broadcasts - the unsigned PSBT is included in the deposit result for future external signing). Sends invoice amount to the HTLC address:
+   1. Select UTXOs from the user taproot address derived from `WIF`.
+   2. Build an unsigned PSBT using the chosen inputs and the HTLC output (plus change if applicable).
+   3. Load the signing key from `WIF`.
+   4. Sign the PSBT locally, then finalize it into a raw transaction.
+   5. Broadcast the transaction to the Bitcoin network.
+4. It waits for `MIN_CONFS`, then sends the invoice and deposit txid to the operator.
+5. It waits for a claimable event (poll USER RLN for `Pending` inbound payment).
+6. It decides to call `/invoice/settle` or wait for timeout and refund the HTLC.
+
+#### LP/Operator (pay + claim)
 
 1. Receive the invoice and HTLC deposit txid from the USER.
 2. Verify the HTLC using the current verification flow (TODO: not production-ready; basic on-chain output checks only. Limitations include no script-path spend simulation, no signer policy checks, no fee or RBF handling, no reorg handling, and no confirmation of user/LP key provenance beyond matching template parameters.
@@ -238,23 +212,6 @@ TODO: Improve persistence to support recovery, retries, and multi-swap bookkeepi
 - Add encryption at rest and explicit backup/restore flow.
 - Add index/list endpoints for operator and user recovery tools.
 
-## RGB-LN Node Requirements
-
-The RGB-LN node must return the preimage in the payment response:
-
-```json
-POST /pay @TODO for HODL
-{ "invoice": "rgb1..." }
-
-Response:
-{
-  "status": "succeeded",
-  "preimage": "abc123..."  // 32-byte hex string (64 hex chars)
-}
-```
-
-The preimage is required for HTLC claim operations.
-
 ## Safety Checks
 
 - ✅ Validates pubkey formats (33-byte compressed)
@@ -284,7 +241,7 @@ npm test
 ## Troubleshooting
 
 **`CLIENT_ROLE environment variable is required`**  
-→ Define `CLIENT_ROLE` in `.env` as a default, or override via environment variable: `CLIENT_ROLE=LP npm run dev`. The environment variable takes precedence over `.env` file values.
+→ Define `CLIENT_ROLE` in `.env` as a default, or override via scripts. The environment variable takes precedence over `.env` file values.
 
 **Wrong environment file loaded**  
 → Verify `CLIENT_ROLE` in `.env` matches existing `.env.lp` or `.env.user`. No fallback to `.env` only.
@@ -304,22 +261,35 @@ npm test
 ## File Structure
 
 ```
+run-user.sh           # Script to run USER client instance
+run-lp.sh             # Script to run LP client instance
 src/
-├─ index.ts           # CLI entry point
+├─ index.ts           # CLI entry point (role-based: USER/LP)
 ├─ config.ts          # Environment configuration
-├─ utils/crypto.ts    # SHA256, hex helpers
+├─ utils/
+│  ├─ crypto.ts       # SHA256, hex helpers
+│  ├─ store.ts        # HODL record persistence
+│  ├─ comm-server.ts  # HTTP server for USER (publishes submarine data)
+│  └─ comm-client.ts  # HTTP client for LP (fetches submarine data)
 ├─ bitcoin/
-│  ├─ rpc.ts         # Bitcoin RPC client
-│  ├─ watch.ts       # UTXO monitoring
-   ├─ htlc.ts        # P2WSH HTLC builder
-│  ├─ htlc_p2tr.ts   # P2TR HTLC builder
-│  ├─ claim.ts       # Claim with preimage
-│  └─ refund.ts      # Return PSBT builder
+│  ├─ rpc.ts          # Bitcoin RPC client
+│  ├─ watch.ts        # UTXO monitoring
+│  ├─ htlc.ts         # P2WSH HTLC builder (deprecated)
+│  ├─ htlc_p2tr.ts    # P2TR HTLC builder
+│  ├─ claim.ts        # Claim HTLC with preimage
+│  ├─ refund.ts       # Refund PSBT builder
+│  ├─ deposit.ts      # Deposit transaction builder
+│  ├─ verify_p2tr.ts  # HTLC verification for LP
+│  ├─ keys.ts         # Key derivation from WIF
+│  ├─ network.ts      # Network configuration
+│  ├─ balance.ts      # Balance checking utilities
+│  ├─ derive_keys.ts  # Key derivation CLI tool
+│  └─ utxo_utils.ts   # UTXO selection utilities
 ├─ rln/
-│  ├─ client.ts      # RGB-LN API client
-│  └─ types.ts       # Endpoint schemas
+│  ├─ client.ts       # RGB-LN API client
+│  └─ types.ts        # Endpoint schemas
 └─ swap/
-   └─ orchestrator.ts # Main swap coordination
+   └─ orchestrator.ts  # Main swap coordination (runDeposit, runLpOperatorFlow)
 ```
 
 ## Production Notes

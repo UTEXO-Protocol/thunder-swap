@@ -7,6 +7,7 @@ export interface SubmarineData {
   fundingVout: number;
   userRefundPubkeyHex: string;
   paymentHash: string;
+  tLock: number; // Timelock block height used by USER when building HTLC
 }
 
 const USER_COMM_URL = config.USER_COMM_URL ?? 'http://localhost:9999';

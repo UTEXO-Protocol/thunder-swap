@@ -138,7 +138,7 @@ export async function waitForFundingConfirmation(
   txid: string,
   minConfs: number = config.MIN_CONFS,
   maxAttempts: number = 60,
-  intervalMs: number = 5000
+  intervalMs: number = 60000 // 1 min
 ): Promise<void> {
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {

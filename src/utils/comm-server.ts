@@ -7,6 +7,7 @@ export interface SubmarineData {
   fundingVout: number;
   userRefundPubkeyHex: string;
   paymentHash: string;
+  tLock: number; // Timelock block height used by USER when building HTLC
 }
 
 let submarineData: SubmarineData | null = null;
@@ -56,7 +57,7 @@ export function startCommServer(): void {
   if (CLIENT_ROLE !== 'USER') return;
 
   server.listen(PORT, () => {
-    console.log(`📡 Submarine comm server listening on http://localhost:${PORT}/submarine`);
+    console.log(`📡 USER comm server running on http://localhost:${PORT}/submarine (LP will connect via comm client)`);
   });
 }
 
