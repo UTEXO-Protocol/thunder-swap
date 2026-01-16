@@ -33,11 +33,11 @@ export function isValidHex(hex: string, expectedLength?: number): boolean {
   if (!/^[0-9a-fA-F]+$/.test(hex)) {
     return false;
   }
-  
+
   if (expectedLength !== undefined && hex.length !== expectedLength * 2) {
     return false;
   }
-  
+
   return true;
 }
 
@@ -48,7 +48,7 @@ export function isValidCompressedPubkey(hex: string): boolean {
   if (!isValidHex(hex, 33)) {
     return false;
   }
-  
+
   const firstByte = hex.slice(0, 2);
   return firstByte === '02' || firstByte === '03';
 }
@@ -94,4 +94,13 @@ export function assertValidCompressedPubkey(pubkeyHex: string, label: string): v
   if (!ecc.isPoint(pubkey) || !ecc.isPointCompressed(pubkey)) {
     throw new Error(`${label} pubkey is not a valid secp256k1 point`);
   }
+}
+
+/**
+ * Convert compressed pubkey hex to x-only hex (drops 0x02/0x03 prefix).
+ * Assumes caller validates compressed pubkey format beforehand.
+ */
+export function getXOnlyHex(compressedPubkeyHex: string): string {
+  const buf = hexToBuffer(compressedPubkeyHex);
+  return buf.subarray(1).toString('hex');
 }

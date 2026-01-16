@@ -6,8 +6,8 @@ export interface SubmarineData {
   fundingTxid: string;
   fundingVout: number;
   userRefundPubkeyHex: string;
-  paymentHash: string;
   tLock: number; // Timelock block height used by USER when building HTLC
+  // paymentHash is NOT included - LP decodes invoice & extracts it
 }
 
 let submarineData: SubmarineData | null = null;
@@ -55,11 +55,16 @@ const server = http.createServer((req, res) => {
   res.end('Not found');
 });
 
-export function startCommServer(): void {
-  if (CLIENT_ROLE !== 'USER') return;
+export function startCommServer(): Promise<void> {
+  if (CLIENT_ROLE !== 'USER') return Promise.resolve();
 
-  server.listen(PORT, () => {
-    console.log(`USER comm server running on http://localhost:${PORT}/submarine (LP will connect via comm client)`);
+  return new Promise((resolve) => {
+    server.listen(PORT, () => {
+      console.log(
+        `USER comm server running on http://localhost:${PORT}/submarine (LP will connect via comm client)\n`
+      );
+      resolve();
+    });
   });
 }
 

@@ -6,8 +6,8 @@ export interface SubmarineData {
   fundingTxid: string;
   fundingVout: number;
   userRefundPubkeyHex: string;
-  paymentHash: string;
   tLock: number; // Timelock block height used by USER when building HTLC
+  // paymentHash is NOT included - LP decodes invoice & extracts it
 }
 
 const USER_COMM_URL = config.USER_COMM_URL ?? 'http://localhost:9999';
@@ -27,8 +27,8 @@ function assertSubmarineData(data: any): asserts data is SubmarineData {
   }
 }
 
-export async function fetchSubmarineData(): Promise<SubmarineData | null> {
-  const response = await axios.get<SubmarineData>(`${USER_COMM_URL}/submarine`, {
+export async function fetchSubmarineData(): Promise<SubmarineData> {
+  const response = await axios.get<SubmarineData | { error: string }>(`${USER_COMM_URL}/submarine`, {
     timeout: REQUEST_TIMEOUT_MS,
     validateStatus: (status) => status === 200 || status === 204
   });

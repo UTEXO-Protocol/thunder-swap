@@ -1,5 +1,10 @@
 #!/usr/bin/env node
-import { runDeposit, runLpOperatorFlow } from './swap/orchestrator.js';
+import {
+  runDeposit,
+  runLpOperatorFlow,
+  runUserSettleHodlInvoice,
+  runUserWaitInvoiceStatus
+} from './swap/orchestrator.js';
 import { validateWIF, isValidCompressedPubkey } from './utils/crypto.js';
 import { CLIENT_ROLE, config } from './config.js';
 import readline from 'node:readline/promises';
@@ -110,7 +115,7 @@ function validateEnvironment(): void {
 }
 
 async function runUserFlow(): Promise<void> {
-  startCommServer();
+  await startCommServer();
 
   // Derive user refund pubkey from WIF
   const derived = deriveTaprootFromWIF(config.WIF);
@@ -119,22 +124,22 @@ async function runUserFlow(): Promise<void> {
   // Prompt for swap amount
   const amountSat = await parseAmount();
 
-  console.log('Swap Parameters:');
+  console.log('\nSubmarine Swap Parameters:');
   console.log(`   Amount: ${amountSat} sats`);
-  console.log(`   User Refund Pubkey: ${userRefundPubkeyHex.slice(0, 20)}...`);
+  console.log(`   User Refund Pubkey: ${userRefundPubkeyHex}`);
   console.log(`   User Refund Address: ${derived.taproot_address}\n`);
 
   // User-side deposit flow: create HODL invoice and wait for funding
   const result = await runDeposit({ amountSat, userRefundPubkeyHex });
 
   console.log('\n=====================================');
-  console.log('HODL invoice prepared and deposit confirmed.');
+  console.log('HODL invoice prepared and on-chain deposit confirmed.');
   console.log(`   Invoice: ${result.invoice}`);
   console.log(`   Payment Hash: ${result.payment_hash}`);
   console.log(`   Preimage: ${result.preimage}`);
   console.log(`   Payment Secret: ${result.payment_secret}`);
   console.log(`   HTLC (P2TR) Address: ${result.htlc_p2tr_address}`);
-  console.log(`   Internal Key (hex): ${result.htlc_p2tr_internal_key_hex}`);
+  console.log(`   HTLC Internal Key (hex): ${result.htlc_p2tr_internal_key_hex}`);
 
   if (result.deposit.fee_sat > 0) {
     console.log(`   Fee: ${result.deposit.fee_sat} sats`);
@@ -147,16 +152,26 @@ async function runUserFlow(): Promise<void> {
     `   Funding: ${result.funding.txid}:${result.funding.vout} (${result.funding.value} sats)`
   );
 
-  // Publish submarine data for LP to consume
+  console.log('\nStep 5: Publishing submarine data for LP to consume...');
   publishSubmarineData({
     invoice: result.invoice,
     fundingTxid: result.funding.txid,
     fundingVout: result.funding.vout,
     userRefundPubkeyHex: userRefundPubkeyHex,
-    paymentHash: result.payment_hash,
     tLock: result.t_lock // Send the exact timelock USER used when building HTLC
   });
-  console.log('LP can now fetch submarine data via comm client and proceed to pay/claim.');
+  console.log('   LP can now fetch submarine data via comm client and proceed to pay & claim.');
+
+  console.log('\nStep 6: Waiting for payment confirmation...');
+  await runUserSettleHodlInvoice({ paymentHash: result.payment_hash });
+
+  console.log('\nStep 7: Getting invoice status...');
+  const invoiceStatus = await runUserWaitInvoiceStatus({ invoice: result.invoice });
+  if (invoiceStatus.status === 'Succeeded') {
+    console.log('   Invoice settled successfully');
+  } else {
+    console.log('   Invoice not settled');
+  }
 }
 
 async function runLpFlow(): Promise<void> {
@@ -167,6 +182,7 @@ async function runLpFlow(): Promise<void> {
   console.log(`   Invoice: ${submarineData.invoice}`);
   console.log(`   Funding: ${submarineData.fundingTxid}:${submarineData.fundingVout}`);
   console.log(`   User Refund Pubkey: ${submarineData.userRefundPubkeyHex}`);
+  console.log(`   Timelock: ${submarineData.tLock}`);
 
   const result = await runLpOperatorFlow({
     invoice: submarineData.invoice,
@@ -176,7 +192,7 @@ async function runLpFlow(): Promise<void> {
     tLock: submarineData.tLock // Use USER's exact timelock
   });
 
-  console.log('LP flow completed:', result);
+  console.log('LP flow completed:', JSON.stringify(result, null, 2));
 }
 
 async function main(): Promise<void> {

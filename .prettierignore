@@ -1,0 +1,21 @@
+# Dependencies
+node_modules/
+package-lock.json
+
+# Build outputs
+dist/
+*.js.map
+
+# Logs
+*.log
+
+# Environment files
+.env*
+!.env.example
+
+# Git
+.git/
+
+# Other
+*.min.js
+*.min.css

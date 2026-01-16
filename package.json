@@ -8,12 +8,14 @@
     "build": "tsc -p tsconfig.json",
     "derive-keys": "tsx src/bitcoin/derive_keys.ts",
     "balance": "tsx src/bitcoin/balance.ts",
-    "test": "tsx src/bitcoin/htlc_p2tr.test.ts && tsx src/bitcoin/deposit.test.ts && tsx src/swap/runDeposit.test.ts"
+    "test": "tsx src/bitcoin/htlc_p2tr.test.ts && tsx src/bitcoin/deposit.test.ts && tsx src/swap/runDeposit.test.ts",
+    "format": "prettier --write \"src/**/*.{ts,json,md}\" \"*.{json,md}\""
   },
   "dependencies": {
     "axios": "^1.7.2",
     "bip32": "^4.0.0",
     "bitcoinjs-lib": "^6.1.5",
+    "varuint-bitcoin": "^1.1.2",
     "dotenv": "^16.4.5",
     "ecpair": "^2.1.0",
     "tiny-secp256k1": "^2.2.3",
