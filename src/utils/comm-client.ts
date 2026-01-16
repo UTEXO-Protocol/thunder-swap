@@ -47,13 +47,17 @@ export async function waitForSubmarineData(
   pollIntervalMs: number = 2000
 ): Promise<SubmarineData> {
   let delayMs = pollIntervalMs;
+  console.log(`LP: Starting to poll for submarine data (max ${maxAttempts} attempts, base interval ${pollIntervalMs}ms)`);
 
   for (let i = 0; i < maxAttempts; i++) {
     try {
       const data = await fetchSubmarineData();
       if (data) {
+        console.log(`LP: Received submarine data on attempt ${i + 1}`);
         return data;
       }
+      // Got 204 No Content - data not ready yet
+      console.log(`LP: Attempt ${i + 1}/${maxAttempts} - No data yet (204), waiting ${delayMs}ms...`);
     } catch (err) {
       const axiosErr = err as AxiosError;
       // If the server is unreachable or times out, keep retrying within bounds.
@@ -66,6 +70,7 @@ export async function waitForSubmarineData(
           throw err;
         }
       }
+      console.log(`LP: Attempt ${i + 1}/${maxAttempts} - Error: ${axiosErr?.code || 'unknown'}, retrying in ${delayMs}ms...`);
     }
 
     if (i >= maxAttempts - 1) {
@@ -73,7 +78,8 @@ export async function waitForSubmarineData(
     }
 
     const jitter = Math.floor(Math.random() * 250);
-    await new Promise((resolve) => setTimeout(resolve, delayMs + jitter));
+    const actualDelay = delayMs + jitter;
+    await new Promise((resolve) => setTimeout(resolve, actualDelay));
     // Gradual backoff (without changing the base poll setting) to reduce hammering.
     delayMs = Math.min(Math.floor(delayMs * 1.2), MAX_BACKOFF_MS);
   }

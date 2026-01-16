@@ -36,6 +36,7 @@ const server = http.createServer((req, res) => {
   if (req.method === 'GET' && req.url === '/submarine') {
     if (!submarineData) {
       // Explicitly signal "not ready" without returning an error payload to the client.
+      console.log('USER: GET /submarine - No data yet, returning 204');
       res.writeHead(204, {
         'Content-Type': 'application/json',
         'Cache-Control': 'no-store'
@@ -44,6 +45,7 @@ const server = http.createServer((req, res) => {
       return;
     }
 
+    console.log('USER: GET /submarine - Returning data (200)');
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
     res.end(JSON.stringify(submarineData));
     return;
@@ -57,11 +59,11 @@ export function startCommServer(): void {
   if (CLIENT_ROLE !== 'USER') return;
 
   server.listen(PORT, () => {
-    console.log(`📡 USER comm server running on http://localhost:${PORT}/submarine (LP will connect via comm client)`);
+    console.log(`USER comm server running on http://localhost:${PORT}/submarine (LP will connect via comm client)`);
   });
 }
 
 export function publishSubmarineData(data: SubmarineData): void {
   submarineData = data;
-  console.log('📤 Published submarine data for LP retrieval.');
+  console.log('Published submarine data for LP retrieval.');
 }
