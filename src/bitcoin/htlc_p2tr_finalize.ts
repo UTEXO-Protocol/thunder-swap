@@ -79,6 +79,7 @@ function buildControlBlock(
   const p2tr = bitcoin.payments.p2tr({
     internalPubkey: internalKey,
     scriptTree,
+    redeem: { output: claimScript },
     network
   });
 
