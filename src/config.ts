@@ -46,7 +46,12 @@ const configSchema = z.object({
   HODL_EXPIRY_SEC: z
     .string()
     .transform((val) => parseInt(val, 10))
-    .default('86400')
+    .default('86400'),
+  CLIENT_COMM_PORT: z
+    .string()
+    .transform((val) => parseInt(val, 10))
+    .default('9999'),
+  USER_COMM_URL: z.string().url().optional()
 });
 
 export const config = configSchema.parse({
@@ -61,7 +66,9 @@ export const config = configSchema.parse({
   LP_PUBKEY_HEX: process.env.LP_PUBKEY_HEX,
   RLN_BASE_URL: process.env.RLN_BASE_URL!,
   RLN_API_KEY: process.env.RLN_API_KEY,
-  HODL_EXPIRY_SEC: process.env.HODL_EXPIRY_SEC ?? '86400'
+  HODL_EXPIRY_SEC: process.env.HODL_EXPIRY_SEC ?? '86400',
+  CLIENT_COMM_PORT: process.env.CLIENT_COMM_PORT ?? '9999',
+  USER_COMM_URL: process.env.USER_COMM_URL
 });
 
 export type Config = z.infer<typeof configSchema>;

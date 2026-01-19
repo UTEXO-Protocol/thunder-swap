@@ -9,6 +9,7 @@ import { getNetwork } from './network.js';
 import { isValidCompressedPubkey } from '../utils/crypto.js';
 import {
   DUST_LIMIT_SAT,
+  DUST_LIMIT_P2WPKH_SAT,
   SATS_PER_BTC,
   SpendableUtxo,
   selectUtxosP2TR,
@@ -197,7 +198,7 @@ async function sendFromP2wpkh(wif: string, toAddress: string, amountSat: number)
     });
   }
   psbt.addOutput({ address: toAddress, value: amountSat });
-  if (selection.changeSat >= DUST_LIMIT_SAT) {
+  if (selection.changeSat >= DUST_LIMIT_P2WPKH_SAT) {
     psbt.addOutput({ address: fromPay.address, value: selection.changeSat });
   }
 

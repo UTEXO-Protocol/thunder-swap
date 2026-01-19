@@ -17,4 +17,3 @@ export function getNetwork(): bitcoin.Network {
       throw new Error(`Unsupported network: ${config.NETWORK}`);
   }
 }
-

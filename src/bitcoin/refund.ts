@@ -52,7 +52,9 @@ export async function buildRefundPsbtBase64(
   const outputValue = utxo.value - estimatedFee;
 
   if (outputValue <= 1000) {
-    throw new Error(`UTXO value too low: ${utxo.value} sats, need at least ${estimatedFee + 1000} sats`);
+    throw new Error(
+      `UTXO value too low: ${utxo.value} sats, need at least ${estimatedFee + 1000} sats`
+    );
   }
 
   // Create PSBT
@@ -60,7 +62,7 @@ export async function buildRefundPsbtBase64(
 
   // Add input
   const txHash = Buffer.from(utxo.txid, 'hex');
-  
+
   // Get previous output details for witness utxo
   let prevTx;
   try {
@@ -68,7 +70,7 @@ export async function buildRefundPsbtBase64(
     if (!txResult || !txResult.vout || txResult.vout.length <= utxo.vout) {
       throw new Error(`Could not get output ${utxo.vout} from transaction ${utxo.txid}`);
     }
-    
+
     prevTx = txResult;
   } catch (error) {
     console.error(`Error retrieving previous transaction. Will try with minimal witnessUtxo.`);
@@ -76,10 +78,7 @@ export async function buildRefundPsbtBase64(
 
   // Calculate witness script hash for this output (needed for P2WSH)
   const witnessScriptHash = bitcoin.crypto.sha256(redeemScript);
-  const witnessScriptPubkey = bitcoin.script.compile([
-    bitcoin.opcodes.OP_0,
-    witnessScriptHash
-  ]);
+  const witnessScriptPubkey = bitcoin.script.compile([bitcoin.opcodes.OP_0, witnessScriptHash]);
 
   // Add witness UTXO
   const witnessUtxo = {

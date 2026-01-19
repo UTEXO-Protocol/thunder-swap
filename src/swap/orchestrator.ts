@@ -4,11 +4,13 @@ import { waitForFunding } from '../bitcoin/watch.js';
 import { buildHtlcRedeemScript } from '../bitcoin/htlc.js';
 import { buildP2TRHTLC } from '../bitcoin/htlc_p2tr.js';
 import { claimWithPreimage } from '../bitcoin/claim.js';
+import { claimP2trHtlc } from '../bitcoin/htlc_p2tr_finalize.js';
 import { buildRefundPsbtBase64 } from '../bitcoin/refund.js';
 import { sendDepositTransaction } from '../bitcoin/deposit.js';
+import { verifyFundingTransaction } from '../bitcoin/verify_p2tr.js';
 import { sha256hex, hexToBuffer } from '../utils/crypto.js';
 import { randomBytes } from 'crypto';
-import { persistHodlRecord } from '../utils/store.js';
+import { getHodlRecord, persistHodlRecord } from '../utils/store.js';
 import { config } from '../config.js';
 import { deriveTaprootFromWIF } from '../bitcoin/keys.js';
 
@@ -56,6 +58,42 @@ interface DepositResult {
   };
 }
 
+interface UserSettleParams {
+  paymentHash: string;
+  maxAttempts?: number;
+  pollIntervalMs?: number;
+}
+
+interface UserSettleResult {
+  payment_hash: string;
+  settled: boolean;
+  status: 'Pending' | 'Claimable' | 'Succeeded' | 'Cancelled' | 'Failed' | 'Timeout';
+}
+
+interface UserInvoiceStatusParams {
+  invoice: string;
+  maxAttempts?: number;
+  pollIntervalMs?: number;
+}
+
+interface UserInvoiceStatusResult {
+  status: 'Pending' | 'Succeeded' | 'Cancelled' | 'Failed' | 'Expired' | 'Timeout';
+}
+
+interface LpOperatorParams {
+  invoice: string;
+  fundingTxid: string;
+  fundingVout: number;
+  userRefundPubkeyHex: string;
+  tLock: number; // Timelock block height (must match USER's HTLC construction)
+}
+
+interface LpOperatorResult {
+  payment_hash: string;
+  status: 'Pending' | 'Claimable' | 'Succeeded' | 'Cancelled' | 'Failed' | 'Timeout';
+  claim_txid?: string;
+}
+
 type RunDepositDeps = {
   rlnClient: typeof rlnClient;
   rpc: typeof rpc;
@@ -63,6 +101,17 @@ type RunDepositDeps = {
   buildP2TRHTLC: typeof buildP2TRHTLC;
   sendDeposit: typeof sendDepositTransaction;
   persistHodlRecord: typeof persistHodlRecord;
+  config: typeof config;
+};
+
+type RunUserSettleDeps = {
+  rlnClient: typeof rlnClient;
+  getHodlRecord: typeof getHodlRecord;
+};
+
+type RunLpOperatorDeps = {
+  rlnClient: typeof rlnClient;
+  verifyFundingTransaction: typeof verifyFundingTransaction;
   config: typeof config;
 };
 
@@ -80,8 +129,6 @@ export async function runDeposit(
   const sendDeposit = depsOverride.sendDeposit ?? sendDepositTransaction;
   const persist = depsOverride.persistHodlRecord ?? persistHodlRecord;
   const cfg = depsOverride.config ?? config;
-
-  console.log('Preparing user-side Submarine Swap deposit...\n');
 
   if (!Number.isFinite(amountSat) || amountSat <= 0) {
     throw new Error('amountSat must be a positive integer (sats)');
@@ -135,6 +182,7 @@ export async function runDeposit(
   });
 
   // Step 2: Build HTLC (P2TR)
+  console.log('\nStep 2: Building HTLC (P2TR)...');
   // Read tip height and set timeout block height
   const tipHeight = await rpcClient.getBlockCount();
   const tLock = tipHeight + cfg.LOCKTIME_BLOCKS;
@@ -144,15 +192,14 @@ export async function runDeposit(
   const lpPubkeyHex = cfg.LP_PUBKEY_HEX;
   console.log(`   LP Public Key: ${lpPubkeyHex}`);
 
-  console.log('\nStep 2: Building HTLC (P2TR)...');
   const p2trResult = buildP2tr(H, lpPubkeyHex, userRefundPubkeyHex, tLock);
   console.log(`   P2TR HTLC Address: ${p2trResult.taproot_address}`);
   console.log(`   Amount to fund: ${amountSat} sats`);
 
   // Step 3: Send deposit to HTLC address
-  console.log('\nStep 3: Sending deposit transaction...');
+  console.log('\nStep 3: Sending on-chain deposit...');
   const depositTx = await sendDeposit(p2trResult.taproot_address, amountSat);
-  console.log(`   Deposit transaction broadcast: ${depositTx.txid}`);
+  console.log(`   Transaction ID: ${depositTx.txid}`);
   if (depositTx.fee_sat > 0) {
     console.log(`   Fee: ${depositTx.fee_sat} sats`);
   }
@@ -185,6 +232,200 @@ export async function runDeposit(
     },
     funding
   };
+}
+
+/**
+ * User-side flow: wait for claimable HTLC, then settle HODL invoice.
+ */
+export async function runUserSettleHodlInvoice(
+  { paymentHash, maxAttempts = 120, pollIntervalMs = 5000 }: UserSettleParams,
+  depsOverride: Partial<RunUserSettleDeps> = {}
+): Promise<UserSettleResult> {
+  const rln = depsOverride.rlnClient ?? rlnClient;
+  const loadHodlRecord = depsOverride.getHodlRecord ?? getHodlRecord;
+
+  const record = await loadHodlRecord(paymentHash);
+  if (!record) {
+    throw new Error(`No HODL record found for payment hash: ${paymentHash}`);
+  }
+
+  let status: UserSettleResult['status'] = 'Timeout';
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      const paymentDetails = await rln.getPayment(paymentHash);
+      if (!paymentDetails.payment.inbound) {
+        throw new Error('Payment is outbound; check payment hash and role');
+      }
+
+      status = paymentDetails.payment.status as UserSettleResult['status'];
+      console.log(`   Attempt ${attempt + 1}/${maxAttempts}: Status = ${status}`);
+
+      if (
+        status === 'Claimable' ||
+        status === 'Succeeded' ||
+        status === 'Cancelled' ||
+        status === 'Failed'
+      ) {
+        break;
+      }
+    } catch (error: any) {
+      console.log(`   Attempt ${attempt + 1} failed: ${error.message}`);
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+  }
+
+  if (status === 'Cancelled' || status === 'Failed' || status === 'Timeout') {
+    return { payment_hash: paymentHash, settled: false, status };
+  }
+
+  if (status === 'Succeeded') {
+    return { payment_hash: paymentHash, settled: true, status };
+  }
+
+  if (status !== 'Claimable') {
+    return { payment_hash: paymentHash, settled: false, status };
+  }
+
+  await rln.invoiceSettle({
+    payment_hash: paymentHash,
+    payment_preimage: record.preimage
+  });
+
+  return { payment_hash: paymentHash, settled: true, status: 'Succeeded' };
+}
+
+/**
+ * User-side flow: poll invoice status after settlement until final.
+ */
+export async function runUserWaitInvoiceStatus(
+  { invoice, maxAttempts = 120, pollIntervalMs = 5000 }: UserInvoiceStatusParams,
+  depsOverride: Partial<RunUserSettleDeps> = {}
+): Promise<UserInvoiceStatusResult> {
+  const rln = depsOverride.rlnClient ?? rlnClient;
+
+  let status: UserInvoiceStatusResult['status'] = 'Timeout';
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const response = await rln.invoiceStatus({ invoice });
+    status = response.status;
+    console.log(`   Attempt ${attempt + 1}/${maxAttempts}: Status = ${status}`);
+
+    if (
+      status === 'Succeeded' ||
+      status === 'Cancelled' ||
+      status === 'Failed' ||
+      status === 'Expired'
+    ) {
+      return { status };
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+  }
+
+  return { status };
+}
+
+/**
+ * LP/operator-side flow: verify HTLC, pay invoice, wait for settlement, claim on-chain.
+ */
+export async function runLpOperatorFlow(
+  { invoice, fundingTxid, fundingVout, userRefundPubkeyHex, tLock }: LpOperatorParams,
+  depsOverride: Partial<RunLpOperatorDeps> = {}
+): Promise<LpOperatorResult> {
+  const rln = depsOverride.rlnClient ?? rlnClient;
+  const verifyFunding = depsOverride.verifyFundingTransaction ?? verifyFundingTransaction;
+  const cfg = depsOverride.config ?? config;
+
+  // Step 1: Decode invoice to get payment hash and amount.
+  console.log('\nStep 1: Decoding HODL invoice...');
+  const decoded = await rln.decode(invoice);
+  const paymentHash = decoded.payment_hash;
+  const amountMsat = decoded.amt_msat;
+  console.log(`   Decoded Invoice: ${JSON.stringify(decoded, null, 2)}`);
+  console.log(`   Payment Hash (H): ${paymentHash}`);
+  console.log(`   Amount: ${amountMsat} millisatoshis`);
+
+  if (!cfg.LP_PUBKEY_HEX) {
+    throw new Error('LP_PUBKEY_HEX is required to verify the HTLC');
+  }
+
+  // Step 2: Verify HTLC funding output (P2TR).
+  // Use the exact tLock that USER used when building the HTLC (sent via submarine data)
+  // Do NOT recalculate - block height will have changed!
+  const template = {
+    payment_hash: paymentHash,
+    lp_pubkey: cfg.LP_PUBKEY_HEX,
+    user_pubkey: userRefundPubkeyHex,
+    cltv_expiry: tLock // Use USER's tLock from submarine data
+  };
+
+  console.log('\nStep 2: Verify P2TR HTLC funding output...');
+  console.log(`   Funding Transaction: ${fundingTxid}:${fundingVout}`);
+  console.log(`   Template: ${JSON.stringify(template, null, 2)}`);
+  console.log(`   Min Confs: ${cfg.MIN_CONFS}`);
+
+  const fundingInfo = await verifyFunding(
+    { txid: fundingTxid, vout: fundingVout },
+    template,
+    amountMsat,
+    cfg.MIN_CONFS
+  );
+  console.log(`   Funding info: ${JSON.stringify(fundingInfo, null, 2)}`);
+
+  // Step 3: Send payment.
+  console.log('\nStep 3: Sending payment...');
+  const payResult = await rln.pay(invoice);
+  console.log(`   Payment result: ${JSON.stringify(payResult, null, 2)}`);
+
+  if (payResult.status === 'Failed') {
+    return { payment_hash: paymentHash, status: 'Failed' };
+  }
+
+  // Step 4: Wait until payment is settled.
+  console.log('\nStep 4: Waiting for payment settlement...');
+  const maxAttempts = 120;
+  let finalStatus: LpOperatorResult['status'] = 'Timeout';
+  let preimage: string | undefined;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const paymentStatus = await rln.getPaymentPreimage(paymentHash);
+    finalStatus = paymentStatus.status as LpOperatorResult['status'];
+    console.log(`   Attempt ${attempt + 1}/${maxAttempts}: Status = ${finalStatus}`);
+
+    if (finalStatus === 'Succeeded') {
+      preimage = paymentStatus.preimage ?? undefined;
+      if (preimage) {
+        break;
+      }
+    } else if (finalStatus === 'Cancelled' || finalStatus === 'Failed') {
+      break;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+  }
+
+  if (finalStatus !== 'Succeeded') {
+    return { payment_hash: paymentHash, status: finalStatus };
+  }
+
+  if (!preimage) {
+    throw new Error('Payment succeeded but no preimage is available for on-chain claim');
+  }
+  console.log(`   Payment preimage: ${preimage}`);
+
+  // Step 5: Claim HTLC on-chain.
+  console.log('\nStep 5: Claiming HTLC on-chain...');
+
+  const claimResult = await claimP2trHtlc(
+    { txid: fundingTxid, vout: fundingVout, value: fundingInfo.amount_sat },
+    paymentHash,
+    preimage,
+    cfg.WIF,
+    userRefundPubkeyHex,
+    tLock
+  );
+  console.log(`   Claim transaction broadcast: ${claimResult.txid}`);
+  console.log(`   LP claim address: ${claimResult.lp_address}`);
+  return { payment_hash: paymentHash, status: 'Succeeded', claim_txid: claimResult.txid };
 }
 
 /**

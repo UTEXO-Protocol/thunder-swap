@@ -4,10 +4,13 @@ import {
   DecodeInvoiceResponse,
   PayInvoiceResponse,
   GetPaymentResponse,
+  GetPaymentPreimageResponse,
   InvoiceHodlRequest,
   InvoiceHodlResponse,
   InvoiceSettleRequest,
   InvoiceCancelRequest,
+  InvoiceStatusRequest,
+  InvoiceStatusResponse,
   EmptyResponse
 } from './types.js';
 
@@ -23,7 +26,7 @@ export class RLNClient {
       headers: {
         'Content-Type': 'application/json',
         ...(config.RLN_API_KEY && {
-          'Authorization': `Bearer ${config.RLN_API_KEY}`
+          Authorization: `Bearer ${config.RLN_API_KEY}`
         })
       }
     });
@@ -35,7 +38,7 @@ export class RLNClient {
   async decode(invoice: string): Promise<DecodeInvoiceResponse> {
     try {
       console.log('Decoding RGB-LN invoice...');
-      
+
       const response = await this.httpClient.post('/decodelninvoice', {
         invoice
       });
@@ -53,17 +56,19 @@ export class RLNClient {
   async pay(invoice: string): Promise<PayInvoiceResponse> {
     try {
       console.log('Paying RGB-LN invoice...');
-      
+
       const response = await this.httpClient.post('/sendpayment', {
         invoice
       });
 
       const result = response.data;
       console.log('PayInvoiceResponse', result);
-      
+
       if (result.status === 'Pending') {
         console.warn('WARNING: Payment succeeded but no preimage returned by RGB-LN node');
-        console.warn('You may need to update your RGB-LN implementation to include preimage in payment response');
+        console.warn(
+          'You may need to update your RGB-LN implementation to include preimage in payment response'
+        );
       }
 
       return result;
@@ -78,8 +83,8 @@ export class RLNClient {
    */
   async getPayment(paymentHash: string): Promise<GetPaymentResponse> {
     try {
-      console.log(`Getting payment details for hash: ${paymentHash}...`);
-      
+      console.log(`   Getting payment details for hash: ${paymentHash}...\n`);
+
       const response = await this.httpClient.post('/getpayment', {
         payment_hash: paymentHash
       });
@@ -87,8 +92,25 @@ export class RLNClient {
       console.log('GetPaymentResponse', response.data);
       return response.data;
     } catch (error: any) {
-      const errorMsg = error?.response?.data?.error || error?.message || 'Failed to get payment details';
+      const errorMsg =
+        error?.response?.data?.error || error?.message || 'Failed to get payment details';
       throw new Error(`RLN getPayment error: ${errorMsg}`);
+    }
+  }
+
+  /**
+   * Get outbound payment status and preimage (when available) by payment hash
+   */
+  async getPaymentPreimage(paymentHash: string): Promise<GetPaymentPreimageResponse> {
+    try {
+      const response = await this.httpClient.post('/getpaymentpreimage', {
+        payment_hash: paymentHash
+      });
+      return response.data;
+    } catch (error: any) {
+      const errorMsg =
+        error?.response?.data?.error || error?.message || 'Failed to get payment preimage';
+      throw new Error(`RLN getPaymentPreimage error: ${errorMsg}`);
     }
   }
 
@@ -98,8 +120,6 @@ export class RLNClient {
    */
   async invoiceHodl(request: InvoiceHodlRequest): Promise<InvoiceHodlResponse> {
     try {
-      console.log('Creating HODL invoice...');
-
       const response = await this.httpClient.post('/invoice/hodl', request);
 
       console.log('InvoiceHodlResponse', response.data);
@@ -116,16 +136,16 @@ export class RLNClient {
    */
   async invoiceSettle(request: InvoiceSettleRequest): Promise<EmptyResponse> {
     try {
-      console.log(`Settling HODL invoice for payment hash: ${request.payment_hash}...`);
+      console.log(`   Settling HODL invoice for payment hash: ${request.payment_hash}...`);
 
       const response = await this.httpClient.post('/invoice/settle', request);
 
-      console.log('Invoice settled successfully');
+      console.log('   Invoice settled successfully');
       return response.data;
     } catch (error: any) {
       const errorMsg =
         error?.response?.data?.error || error?.message || 'Failed to settle HODL invoice';
-      throw new Error(`RLN invoiceSettle error: ${errorMsg}`);
+      throw new Error(`RLN invoice settlement error: ${errorMsg}`);
     }
   }
 
@@ -144,6 +164,20 @@ export class RLNClient {
       const errorMsg =
         error?.response?.data?.error || error?.message || 'Failed to cancel HODL invoice';
       throw new Error(`RLN invoiceCancel error: ${errorMsg}`);
+    }
+  }
+
+  /**
+   * Get invoice status by invoice string
+   */
+  async invoiceStatus(request: InvoiceStatusRequest): Promise<InvoiceStatusResponse> {
+    try {
+      const response = await this.httpClient.post('/invoicestatus', request);
+      return response.data;
+    } catch (error: any) {
+      const errorMsg =
+        error?.response?.data?.error || error?.message || 'Failed to get invoice status';
+      throw new Error(`RLN invoiceStatus error: ${errorMsg}`);
     }
   }
 }

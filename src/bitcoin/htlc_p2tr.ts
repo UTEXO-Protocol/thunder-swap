@@ -24,8 +24,8 @@ export interface P2TRHTLCTemplate {
   cltv_expiry: number; // Timelock block height
 }
 
-type Tapleaf = { output: Buffer; version?: number };
-type Taptree = [Tapleaf, Tapleaf];
+export type Tapleaf = { output: Buffer; version?: number };
+export type Taptree = [Tapleaf, Tapleaf];
 
 function assertValidCltvExpiry(cltvExpiry: number): void {
   if (!Number.isSafeInteger(cltvExpiry) || cltvExpiry < 0) {

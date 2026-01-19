@@ -52,26 +52,26 @@ export function buildHtlcRedeemScript(
   const compiledScript = bitcoin.script.compile([
     // Conditional branch
     bitcoin.opcodes.OP_IF,
-    // Hash commitment branch (preimage branch)  
+    // Hash commitment branch (preimage branch)
     bitcoin.opcodes.OP_SHA256,
-    H,                                    // <H> 32 bytes
-    bitcoin.opcodes.OP_EQUALVERIFY,       // verify hash matches
-    lpPubkey,                             // <LP_pubkey> 33 bytes
-    bitcoin.opcodes.OP_CHECKSIG,          // LP can claim
+    H, // <H> 32 bytes
+    bitcoin.opcodes.OP_EQUALVERIFY, // verify hash matches
+    lpPubkey, // <LP_pubkey> 33 bytes
+    bitcoin.opcodes.OP_CHECKSIG, // LP can claim
     // Refund branch
     bitcoin.opcodes.OP_ELSE,
     // Time lock
-    lockTimeBuffer,                       // <t_lock> as pushdata
+    lockTimeBuffer, // <t_lock> as pushdata
     bitcoin.opcodes.OP_CHECKLOCKTIMEVERIFY,
     bitcoin.opcodes.OP_DROP,
-    userPubkey,                           // <User_pubkey> 33 bytes
-    bitcoin.opcodes.OP_CHECKSIG,          // User can refund
+    userPubkey, // <User_pubkey> 33 bytes
+    bitcoin.opcodes.OP_CHECKSIG, // User can refund
     bitcoin.opcodes.OP_ENDIF
   ]);
 
   // Compute SHA256(redeemScript) for P2WSH
   const scriptHash = sha256hex(compiledScript);
-  
+
   // Determine network
   let network: bitcoin.Network;
   switch (config.NETWORK) {
