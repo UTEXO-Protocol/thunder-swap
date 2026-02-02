@@ -43,6 +43,8 @@ const configSchema = z.object({
     .regex(/^(02|03)[0-9a-fA-F]{64}$/, 'LP_PUBKEY_HEX must be a compressed pubkey'),
   RLN_BASE_URL: z.string().url(),
   RLN_API_KEY: z.string().optional(),
+  RLN_BASE_URL_L1: z.string().url().optional(),
+  RLN_API_KEY_L1: z.string().optional(),
   HODL_EXPIRY_SEC: z
     .string()
     .transform((val) => parseInt(val, 10))
@@ -54,18 +56,33 @@ const configSchema = z.object({
   USER_COMM_URL: z.string().url().optional()
 });
 
+const network = process.env.NETWORK!;
+const useRegtestRpc =
+  network === 'regtest' &&
+  process.env.BITCOIN_RPC_URL_REGTEST &&
+  process.env.BITCOIN_RPC_USER_REGTEST != null &&
+  process.env.BITCOIN_RPC_PASS_REGTEST != null;
+
 export const config = configSchema.parse({
-  BITCOIN_RPC_URL: process.env.BITCOIN_RPC_URL!,
-  BITCOIN_RPC_USER: process.env.BITCOIN_RPC_USER!,
-  BITCOIN_RPC_PASS: process.env.BITCOIN_RPC_PASS!,
+  BITCOIN_RPC_URL: useRegtestRpc
+    ? process.env.BITCOIN_RPC_URL_REGTEST!
+    : process.env.BITCOIN_RPC_URL!,
+  BITCOIN_RPC_USER: useRegtestRpc
+    ? process.env.BITCOIN_RPC_USER_REGTEST!
+    : process.env.BITCOIN_RPC_USER!,
+  BITCOIN_RPC_PASS: useRegtestRpc
+    ? process.env.BITCOIN_RPC_PASS_REGTEST!
+    : process.env.BITCOIN_RPC_PASS!,
   WIF: process.env.WIF!,
-  NETWORK: process.env.NETWORK!,
+  NETWORK: network,
   MIN_CONFS: process.env.MIN_CONFS!,
   LOCKTIME_BLOCKS: process.env.LOCKTIME_BLOCKS!,
   FEE_RATE_SAT_PER_VB: process.env.FEE_RATE_SAT_PER_VB ?? '1',
   LP_PUBKEY_HEX: process.env.LP_PUBKEY_HEX,
   RLN_BASE_URL: process.env.RLN_BASE_URL!,
   RLN_API_KEY: process.env.RLN_API_KEY,
+  RLN_BASE_URL_L1: process.env.RLN_BASE_URL_L1,
+  RLN_API_KEY_L1: process.env.RLN_API_KEY_L1,
   HODL_EXPIRY_SEC: process.env.HODL_EXPIRY_SEC ?? '86400',
   CLIENT_COMM_PORT: process.env.CLIENT_COMM_PORT ?? '9999',
   USER_COMM_URL: process.env.USER_COMM_URL

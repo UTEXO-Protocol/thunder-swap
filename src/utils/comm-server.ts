@@ -60,6 +60,21 @@ export function startCommServer(): Promise<void> {
   });
 }
 
+export function stopCommServer(): Promise<void> {
+  if (CLIENT_ROLE !== 'USER') return Promise.resolve();
+  if (!server.listening) return Promise.resolve();
+
+  return new Promise((resolve, reject) => {
+    server.close((err) => {
+      if (err) {
+        return reject(err);
+      }
+      console.log('📡 USER comm server stopped.');
+      resolve();
+    });
+  });
+}
+
 export function publishSubmarineData(data: SubmarineData): void {
   submarineData = data;
   console.log('   📤 Published submarine data for LP retrieval.');

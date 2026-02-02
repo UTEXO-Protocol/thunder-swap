@@ -17,6 +17,7 @@ import {
 } from './utxo_utils.js';
 import fs from 'node:fs';
 import dotenv from 'dotenv';
+import { rlnClient } from '../rln/client.js';
 
 bitcoin.initEccLib(tinysecp);
 const ECPair: ECPairAPI = ECPairFactory(tinysecp);
@@ -252,13 +253,19 @@ async function main(): Promise<void> {
     return;
   }
 
+  // role selection: default to current CLIENT_ROLE; "all" to show both
+  const showAll = args[0] === 'all';
+  const roleEnv = process.env.CLIENT_ROLE?.toUpperCase();
+  const currentRole: 'USER' | 'LP' =
+    roleEnv === 'USER' || roleEnv === 'LP' ? (roleEnv as 'USER' | 'LP') : 'USER';
+
   console.log('🔎 Fetching balances...\n');
-  console.log(`RPC: ${config.BITCOIN_RPC_URL}`);
-  console.log(`Network: ${config.NETWORK}\n`);
+  console.log(`L1 RPC: ${config.BITCOIN_RPC_URL}`);
+  console.log(`L1 Network: ${config.NETWORK}\n`);
 
   // Simple connectivity check to surface RPC issues early
   const tip = await rpc.getBlockCount();
-  console.log(`Tip height: ${tip}\n`);
+  console.log(`L1 Tip Height: ${tip}\n`);
 
   // User (from WIF)
   const userKeys = deriveTaprootFromWIF(config.WIF);
@@ -279,6 +286,50 @@ async function main(): Promise<void> {
   );
   console.log(`  p2wpkh utxos:    ${userP2wpkhBalance.utxoCount}`);
 
+  // USER RGB balance via L1 RLN API
+  if (process.env.ASSET_ID_L1) {
+    try {
+      const b = await rlnClient.assetBalance({ asset_id: process.env.ASSET_ID_L1 }, 'USER');
+      const meta = await rlnClient.assetMetadata({ asset_id: process.env.ASSET_ID_L1 }, 'USER');
+      console.log('\nUser RGB balance (from L1 RLN)');
+      console.log(`  asset_id:         ${process.env.ASSET_ID_L1}`);
+      if (meta) {
+        console.log(`  metadata:         ${JSON.stringify(meta)}`);
+      }
+      console.log(`  settled:          ${b.settled}`);
+      console.log(`  future:           ${b.future}`);
+      console.log(`  spendable:        ${b.spendable}`);
+      console.log(`  offchain_outbound:${b.offchain_outbound}`);
+      console.log(`  offchain_inbound: ${b.offchain_inbound}`);
+    } catch (err: any) {
+      console.warn('\nRGB balance lookup failed:', err.message);
+    }
+  } else {
+    console.warn('\nASSET_ID_L1 not set; skipping USER L1 RGB assetbalance.');
+  }
+
+  // USER RGB balance via L2 RLN API
+  if (process.env.ASSET_ID_L2) {
+    try {
+      const b = await rlnClient.assetBalance({ asset_id: process.env.ASSET_ID_L2 }, 'USER', 'L2');
+      const meta = await rlnClient.assetMetadata({ asset_id: process.env.ASSET_ID_L2 }, 'USER', 'L2');
+      console.log('\nUSER RGB balance (from L2 RLN)');
+      console.log(`  asset_id:         ${process.env.ASSET_ID_L2}`);
+      if (meta) {
+        console.log(`  metadata:         ${JSON.stringify(meta)}`);
+      }
+      console.log(`  settled:          ${b.settled}`);
+      console.log(`  future:           ${b.future}`);
+      console.log(`  spendable:        ${b.spendable}`);
+      console.log(`  offchain_outbound:${b.offchain_outbound}`);
+      console.log(`  offchain_inbound: ${b.offchain_inbound}`);
+    } catch (err: any) {
+      console.warn('\nUSER/L2 RGB balance lookup failed:', err.message);
+    }
+  } else {
+    console.warn('\nASSET_ID_LP/ASSET_ID not set; skipping LP RGB assetbalance.');
+  }
+
   // LP (from LP_PUBKEY_HEX)
   if (!config.LP_PUBKEY_HEX) {
     console.warn('\nLP_PUBKEY_HEX is not set; skipping LP balance lookup.');
@@ -294,6 +345,28 @@ async function main(): Promise<void> {
     `  balance:         ${lpBalance.totalSat} sats (${formatBtc(lpBalance.totalSat)} BTC)`
   );
   console.log(`  utxos:           ${lpBalance.utxoCount}`);
+
+  // LP RGB balance via L2 RLN API
+  if (process.env.ASSET_ID_L2) {
+    try {
+      const b = await rlnClient.assetBalance({ asset_id: process.env.ASSET_ID_L2 }, 'LP');
+      const meta = await rlnClient.assetMetadata({ asset_id: process.env.ASSET_ID_L2 }, 'LP');
+      console.log('\nLP RGB balance (from L2 RLN)');
+      console.log(`  asset_id:         ${process.env.ASSET_ID_L2}`);
+      if (meta) {
+        console.log(`  metadata:         ${JSON.stringify(meta)}`);
+      }
+      console.log(`  settled:          ${b.settled}`);
+      console.log(`  future:           ${b.future}`);
+      console.log(`  spendable:        ${b.spendable}`);
+      console.log(`  offchain_outbound:${b.offchain_outbound}`);
+      console.log(`  offchain_inbound: ${b.offchain_inbound}`);
+    } catch (err: any) {
+      console.warn('\nLP RGB balance lookup failed:', err.message);
+    }
+  } else {
+    console.warn('\nASSET_ID_LP/ASSET_ID not set; skipping LP L2 RGB assetbalance.');
+  }
 }
 
 main().catch((err) => {

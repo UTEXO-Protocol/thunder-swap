@@ -9,7 +9,7 @@ import { validateWIF, isValidCompressedPubkey } from './utils/crypto.js';
 import { CLIENT_ROLE, config } from './config.js';
 import readline from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
-import { startCommServer, publishSubmarineData } from './utils/comm-server.js';
+import { startCommServer, stopCommServer, publishSubmarineData } from './utils/comm-server.js';
 import { waitForSubmarineData } from './utils/comm-client.js';
 import { deriveTaprootFromWIF } from './bitcoin/keys.js';
 
@@ -117,60 +117,64 @@ function validateEnvironment(): void {
 async function runUserFlow(): Promise<void> {
   await startCommServer();
 
-  // Derive user refund pubkey from WIF
-  const derived = deriveTaprootFromWIF(config.WIF);
-  const userRefundPubkeyHex = derived.pubkey_hex;
+  try {
+    // Derive user refund pubkey from WIF
+    const derived = deriveTaprootFromWIF(config.WIF);
+    const userRefundPubkeyHex = derived.pubkey_hex;
 
-  // Prompt for swap amount
-  const amountSat = await parseAmount();
+    // Prompt for swap amount
+    const amountSat = 3000//await parseAmount();
 
-  console.log('\nSubmarine Swap Parameters:');
-  console.log(`   Amount: ${amountSat} sats`);
-  console.log(`   User Refund Pubkey: ${userRefundPubkeyHex}`);
-  console.log(`   User Refund Address: ${derived.taproot_address}\n`);
+    console.log('\nSubmarine Swap Parameters:');
+    console.log(`   Amount: ${amountSat} sats`);
+    console.log(`   User Refund Pubkey: ${userRefundPubkeyHex}`);
+    console.log(`   User Refund Address: ${derived.taproot_address}\n`);
 
-  // User-side deposit flow: create HODL invoice and wait for funding
-  const result = await runDeposit({ amountSat, userRefundPubkeyHex });
+    // User-side deposit flow: create HODL invoice and wait for funding
+    const result = await runDeposit({ amountSat, userRefundPubkeyHex });
 
-  console.log('\n=====================================');
-  console.log('HODL invoice prepared and on-chain deposit confirmed.');
-  console.log(`   Invoice: ${result.invoice}`);
-  console.log(`   Payment Hash: ${result.payment_hash}`);
-  console.log(`   Preimage: ${result.preimage}`);
-  console.log(`   Payment Secret: ${result.payment_secret}`);
-  console.log(`   HTLC (P2TR) Address: ${result.htlc_p2tr_address}`);
-  console.log(`   HTLC Internal Key (hex): ${result.htlc_p2tr_internal_key_hex}`);
+    console.log('\n=====================================');
+    console.log('HODL invoice prepared and on-chain deposit confirmed.');
+    console.log(`   Invoice: ${result.invoice}`);
+    console.log(`   Payment Hash: ${result.payment_hash}`);
+    console.log(`   Preimage: ${result.preimage}`);
+    console.log(`   Payment Secret: ${result.payment_secret}`);
+    console.log(`   HTLC (P2TR) Address: ${result.htlc_p2tr_address}`);
+    console.log(`   HTLC script pubkey (hex): ${result.htlc_p2tr_script_pubkey}`);
 
-  if (result.deposit.fee_sat > 0) {
-    console.log(`   Fee: ${result.deposit.fee_sat} sats`);
-  }
-  console.log(`   Deposit txid: ${result.deposit.txid}`);
-  if (result.deposit.change_sat > 0) {
-    console.log(`   Change: ${result.deposit.change_sat} sats → ${result.deposit.change_address}`);
-  }
-  console.log(
-    `   Funding: ${result.funding.txid}:${result.funding.vout} (${result.funding.value} sats)`
-  );
+    if (result.deposit.fee_sat > 0) {
+      console.log(`   Fee: ${result.deposit.fee_sat} sats`);
+    }
+    console.log(`   Deposit txid: ${result.deposit.txid}`);
+    if (result.deposit.change_sat > 0) {
+      console.log(`   Change: ${result.deposit.change_sat} sats → ${result.deposit.change_address}`);
+    }
+    console.log(
+      `   Funding: ${result.funding.txid}:${result.funding.vout} (${result.funding.value} sats)`
+    );
 
-  console.log('\nStep 5: Publishing submarine data for LP to consume...');
-  publishSubmarineData({
-    invoice: result.invoice,
-    fundingTxid: result.funding.txid,
-    fundingVout: result.funding.vout,
-    userRefundPubkeyHex: userRefundPubkeyHex,
-    tLock: result.t_lock // Send the exact timelock USER used when building HTLC
-  });
-  console.log('   LP can now fetch submarine data via comm client and proceed to pay & claim.');
+    console.log('\nStep 7: Publishing submarine data for LP to consume...');
+    publishSubmarineData({
+      invoice: result.invoice,
+      fundingTxid: result.funding.txid,
+      fundingVout: result.funding.vout,
+      userRefundPubkeyHex: userRefundPubkeyHex,
+      tLock: result.t_lock // Send the exact timelock USER used when building HTLC
+    });
+    console.log('   LP can now fetch submarine data via comm client and proceed to pay & claim.');
 
-  console.log('\nStep 6: Waiting for payment confirmation...');
-  await runUserSettleHodlInvoice({ paymentHash: result.payment_hash });
+    console.log('\nStep 8: Waiting for payment confirmation...');
+    await runUserSettleHodlInvoice({ paymentHash: result.payment_hash });
 
-  console.log('\nStep 7: Getting invoice status...');
-  const invoiceStatus = await runUserWaitInvoiceStatus({ invoice: result.invoice });
-  if (invoiceStatus.status === 'Succeeded') {
-    console.log('   Invoice settled successfully');
-  } else {
-    console.log('   Invoice not settled');
+    console.log('\nStep 9: Getting invoice status...');
+    const invoiceStatus = await runUserWaitInvoiceStatus({ invoice: result.invoice });
+    if (invoiceStatus.status === 'Succeeded') {
+      console.log('   Invoice settled successfully');
+    } else {
+      console.log('   Invoice not settled');
+    }
+  } finally {
+    await stopCommServer();
   }
 }
 
@@ -192,7 +196,7 @@ async function runLpFlow(): Promise<void> {
     tLock: submarineData.tLock // Use USER's exact timelock
   });
 
-  console.log('LP flow completed:', JSON.stringify(result, null, 2));
+  console.log('\nLP flow completed:', JSON.stringify(result, null, 2));
 }
 
 async function main(): Promise<void> {
