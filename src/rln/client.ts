@@ -11,22 +11,65 @@ import {
   InvoiceCancelRequest,
   InvoiceStatusRequest,
   InvoiceStatusResponse,
-  EmptyResponse
+  EmptyResponse,
+  RgbInvoiceHtlcRequest,
+  RgbInvoiceHtlcResponse,
+  HtlcClaimRequest,
+  HtlcClaimResponse,
+  SendAssetRequest,
+  SendAssetResponse,
+  AssetBalanceRequest,
+  AssetBalanceResponse,
+  AssetMetadataRequest,
+  AssetMetadataResponse,
+  DecodeRgbInvoiceResponse,
+  WitnessData
 } from './types.js';
+import { parse } from 'dotenv';
+import { readFileSync } from 'fs';
 
 /**
  * RGB-LN API client for invoice decode and payment
  */
 export class RLNClient {
-  private httpClient: AxiosInstance;
+  private httpClient: AxiosInstance; // RLN L2 client
+  private httpClientL1: AxiosInstance; // RLN L1 client
+  private httpClientL2Lp: AxiosInstance; // LP RLN L2 client
 
   constructor() {
+    // RLN L2 client for current role
     this.httpClient = axios.create({
       baseURL: config.RLN_BASE_URL,
       headers: {
         'Content-Type': 'application/json',
         ...(config.RLN_API_KEY && {
           Authorization: `Bearer ${config.RLN_API_KEY}`
+        })
+      }
+    });
+
+    // RLN L1 client for current role
+    this.httpClientL1 = axios.create({
+      baseURL: config.RLN_BASE_URL_L1,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(config.RLN_API_KEY_L1 && {
+          Authorization: `Bearer ${config.RLN_API_KEY_L1}`
+        })
+      }
+    });
+
+    // RLN L2 client for LP - from .env.lp
+    const lpEnv = parse(readFileSync('.env.lp')); // does not overwrite process.env
+    const lpL2Base = lpEnv.RLN_BASE_URL;
+    const lpL2Key = lpEnv.RLN_API_KEY;
+
+    this.httpClientL2Lp = axios.create({
+      baseURL: lpL2Base,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(lpL2Key && {
+          Authorization: `Bearer ${lpL2Key}`
         })
       }
     });
@@ -50,6 +93,22 @@ export class RLNClient {
     }
   }
 
+  async decodeRgbInvoice(invoice: string): Promise<DecodeRgbInvoiceResponse> {
+    try {
+      console.log('Decoding RGB invoice...');
+
+      const response = await this.httpClientL1.post('/decodergbinvoice', {
+        invoice
+      });
+
+      console.log(JSON.stringify(response.data, null, 2));
+      return response.data;
+    } catch (error: any) {
+      const errorMsg = error?.response?.data?.error || error?.message || 'Failed to decode invoice';
+      throw new Error(`RLN decode error: ${errorMsg}`);
+    }
+  }
+
   /**
    * Pay RGB-LN invoice and return preimage on successful payment
    */
@@ -66,9 +125,6 @@ export class RLNClient {
 
       if (result.status === 'Pending') {
         console.warn('WARNING: Payment succeeded but no preimage returned by RGB-LN node');
-        console.warn(
-          'You may need to update your RGB-LN implementation to include preimage in payment response'
-        );
       }
 
       return result;
@@ -120,9 +176,11 @@ export class RLNClient {
    */
   async invoiceHodl(request: InvoiceHodlRequest): Promise<InvoiceHodlResponse> {
     try {
-      const response = await this.httpClient.post('/invoice/hodl', request);
+      console.log(`invoiceHodl → POST ${this.httpClient.defaults.baseURL}/hodlinvoice`);
+      console.log('invoiceHodl payload:', JSON.stringify(request));
+      const response = await this.httpClient.post('/hodlinvoice', request);
 
-      console.log('InvoiceHodlResponse', response.data);
+      // console.log('InvoiceHodlResponse', response.data);
       return response.data;
     } catch (error: any) {
       const errorMsg =
@@ -138,7 +196,7 @@ export class RLNClient {
     try {
       console.log(`   Settling HODL invoice for payment hash: ${request.payment_hash}...`);
 
-      const response = await this.httpClient.post('/invoice/settle', request);
+      const response = await this.httpClient.post('/settlehodlinvoice', request);
 
       console.log('   Invoice settled successfully');
       return response.data;
@@ -156,7 +214,7 @@ export class RLNClient {
     try {
       console.log(`Canceling HODL invoice for payment hash: ${request.payment_hash}...`);
 
-      const response = await this.httpClient.post('/invoice/cancel', request);
+      const response = await this.httpClient.post('/cancelhodlinvoice', request);
 
       console.log('Invoice canceled successfully');
       return response.data;
@@ -178,6 +236,120 @@ export class RLNClient {
       const errorMsg =
         error?.response?.data?.error || error?.message || 'Failed to get invoice status';
       throw new Error(`RLN invoiceStatus error: ${errorMsg}`);
+    }
+  }
+
+  /**
+   * Create an RGB invoice bound to an HTLC P2TR scriptPubKey (USER role → L1 backend)
+   */
+  async rgbInvoiceHtlc(request: RgbInvoiceHtlcRequest): Promise<RgbInvoiceHtlcResponse> {
+    try {
+      console.log(`   rgbInvoiceHtlc → POST ${this.httpClientL1.defaults.baseURL}/rgbinvoicehtlc`);
+      const client = this.httpClientL1;
+      const response = await client.post('/rgbinvoicehtlc', request);
+
+      console.log(`\nrgbInvoiceResponse: ${JSON.stringify(response.data, null, 2)}`);
+      return response.data;
+    } catch (error: any) {
+      const errorMsg =
+        error?.response?.data?.error || error?.message || 'Failed to create RGB HTLC invoice';
+      throw new Error(`rgbInvoiceHtlc error: ${errorMsg}`);
+    }
+  }
+
+  /**
+   * Claim HTLC on-chain via RLN L1 (LP role)
+   */
+  async htlcClaim(request: HtlcClaimRequest): Promise<HtlcClaimResponse> {
+    try {
+      const client = this.httpClientL1;
+      const response = await client.post('/htlcclaim', request);
+      return response.data;
+    } catch (error: any) {
+      const errorMsg = error?.response?.data?.error || error?.message || 'Failed to claim HTLC';
+      throw new Error(`RLN htlcclaim error: ${errorMsg}`);
+    }
+  }
+
+  /**
+   * Send RGB assets using an RGB HTLC invoice on L1
+   */
+  async sendAsset(invoice: string): Promise<SendAssetResponse> {
+    try {
+      const client = this.httpClientL1;
+
+      const decode = await client.post('/decodergbinvoice', { invoice });
+
+      await client.post('/refreshtransfers', { skip_sync: false });
+
+      const witness_data: WitnessData = {
+        amount_sat: 1000,
+      }
+      const request: SendAssetRequest = {
+        asset_id: decode.data.asset_id,
+        assignment: decode.data.assignment,
+        recipient_id: decode.data.recipient_id,
+        witness_data,
+        donation: true,
+        fee_rate: 1,
+        min_confirmations: 1,
+        transport_endpoints: decode.data.transport_endpoints,
+        skip_sync: false,
+      };
+      console.log('/sendasset payload:', JSON.stringify(request, null, 2));
+      const response = await client.post('/sendasset', request);
+
+      await client.post('/refreshtransfers', { skip_sync: false });
+
+      return response.data;
+    } catch (error: any) {
+      const errorMsg = error?.response?.data?.error || error?.message || 'Failed to send asset';
+      throw new Error(`RLN sendasset error: ${errorMsg}`);
+    }
+  }
+
+  /**
+   * Query RGB asset balance (role-agnostic)
+   */
+  async assetBalance(
+    request: AssetBalanceRequest,
+    role: 'USER' | 'LP',
+    layer: 'L1' | 'L2' = 'L1'
+  ): Promise<AssetBalanceResponse> {
+    try {
+      // USER -> L1 client; LP -> L2 client
+      const client =
+        role === 'USER' && layer === 'L2' ? this.httpClient :
+          role === 'USER' ? this.httpClientL1 :
+            this.httpClientL2Lp;
+      const response = await client.post('/assetbalance', request);
+      return response.data;
+    } catch (error: any) {
+      const errorMsg =
+        error?.response?.data?.error || error?.message || 'Failed to fetch asset balance';
+      throw new Error(`RLN assetbalance error: ${errorMsg}`);
+    }
+  }
+
+  /**
+   * Fetch RGB asset metadata
+   */
+  async assetMetadata(
+    request: AssetMetadataRequest,
+    role: 'USER' | 'LP',
+    layer: 'L1' | 'L2' = 'L1'
+  ): Promise<AssetMetadataResponse> {
+    try {
+      const client =
+        role === 'USER' && layer === 'L2' ? this.httpClient :
+          role === 'USER' ? this.httpClientL1 :
+            this.httpClientL2Lp;
+      const response = await client.post('/assetmetadata', request);
+      return response.data;
+    } catch (error: any) {
+      const errorMsg =
+        error?.response?.data?.error || error?.message || 'Failed to fetch asset metadata';
+      throw new Error(`RLN assetmetadata error: ${errorMsg}`);
     }
   }
 }

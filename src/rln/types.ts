@@ -7,6 +7,17 @@ export interface DecodeInvoiceResponse {
   expires_at?: number;
 }
 
+export interface DecodeRgbInvoiceResponse {
+  recipient_id: string;
+  recipient_type: string;
+  asset_schema?: string | null;
+  asset_id?: string | null;
+  assignment: Assignment;
+  network: string;
+  expiration_timestamp?: number | null;
+  transport_endpoints: string[];
+}
+
 /**
  * Response from pay invoice API call
  */
@@ -113,6 +124,7 @@ export interface EmptyResponse {}
  */
 export interface RLNClientInterface {
   decode(invoice: string): Promise<DecodeInvoiceResponse>;
+  decodeRgbInvoice(invoice: string): Promise<DecodeRgbInvoiceResponse>;
   pay(invoice: string): Promise<PayInvoiceResponse>;
   getPayment(paymentHash: string): Promise<GetPaymentResponse>;
   getPaymentPreimage(paymentHash: string): Promise<GetPaymentPreimageResponse>;
@@ -120,4 +132,106 @@ export interface RLNClientInterface {
   invoiceSettle(request: InvoiceSettleRequest): Promise<EmptyResponse>;
   invoiceCancel(request: InvoiceCancelRequest): Promise<EmptyResponse>;
   invoiceStatus(request: InvoiceStatusRequest): Promise<InvoiceStatusResponse>;
+  rgbInvoiceHtlc(request: RgbInvoiceHtlcRequest): Promise<RgbInvoiceHtlcResponse>;
+  htlcClaim(request: HtlcClaimRequest): Promise<HtlcClaimResponse>;
+  sendAsset(invoice: string, overrides?: Partial<SendAssetRequest>): Promise<SendAssetResponse>;
+  assetBalance(
+    request: AssetBalanceRequest,
+    role: 'USER' | 'LP',
+    layer?: 'L1' | 'L2'
+  ): Promise<AssetBalanceResponse>;
+  assetMetadata(
+    request: AssetMetadataRequest,
+    role: 'USER' | 'LP',
+    layer?: 'L1' | 'L2'
+  ): Promise<AssetMetadataResponse>;
+}
+
+export type AssignmentType = 'Fungible' | 'NonFungible' | 'InflationRight' | 'ReplaceRight' | 'Any';
+
+export interface Assignment {
+  type: AssignmentType;
+  value?: number; // for Fungible/InflationRight
+}
+
+export interface RgbInvoiceHtlcRequest {
+  asset_id?: string;
+  assignment?: Assignment;
+  duration_seconds?: number;
+  min_confirmations?: number;
+  htlc_p2tr_script_pubkey: string; // hex
+  t_lock: number; // block height
+}
+
+export interface RgbInvoiceHtlcResponse {
+  recipient_id: string;
+  invoice: string;
+  expiration_timestamp?: number;
+  batch_transfer_idx: number;
+}
+
+export interface HtlcClaimRequest {
+  payment_hash: string;
+  preimage: string;
+  funding_txid: string;
+  funding_vout: number;
+  funding_value_sat?: number;
+  htlc_p2tr_script_pubkey: string;
+  t_lock: number;
+  asset_id?: string;
+  assignment?: Assignment;
+  recipient_id?: string;
+}
+
+export interface HtlcClaimResponse {
+  txid: string;
+  status?: 'Succeeded' | 'Failed' | 'Pending';
+}
+
+export interface WitnessData {
+  amount_sat: number;
+  blinding?: number;
+}
+
+// RGB asset transfer (sendasset)
+export interface SendAssetRequest {
+  asset_id: string;
+  assignment: Assignment;
+  recipient_id: string;
+  witness_data?: WitnessData;
+  donation: boolean;
+  fee_rate: number;
+  min_confirmations: number;
+  transport_endpoints: string[];
+  skip_sync: boolean;
+}
+
+export interface SendAssetResponse {
+  txid: string;
+}
+
+// RGB balance query (assetbalance)
+export interface AssetBalanceRequest {
+  asset_id: string;
+}
+
+export interface AssetBalanceResponse {
+  settled: number;
+  future: number;
+  spendable: number;
+  offchain_outbound: number;
+  offchain_inbound: number;
+}
+
+export interface AssetMetadataRequest {
+  asset_id: string;
+}
+
+export interface AssetMetadataResponse {
+  asset_id: string;
+  name?: string;
+  ticker?: string;
+  description?: string;
+  decimals?: number;
+  data?: unknown;
 }
