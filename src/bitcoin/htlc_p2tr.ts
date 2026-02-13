@@ -8,7 +8,7 @@ import { getNetwork } from './network.js';
 bitcoin.initEccLib(ecc);
 
 // Protocol constants for deterministic internal key and tapscript leaves
-const INTERNAL_KEY_CONSTANT = 'HODL_INVOICE_P2TR_HTLC_INTERNAL_KEY_v0';
+const INTERNAL_KEY_CONSTANT = 'SUBMARINE_SWAP_HTLC_P2TR_INTERNAL_KEY_V0';
 const INTERNAL_KEY_MAX_ATTEMPTS = 256;
 const TAPLEAF_VERSION = 0xc0;
 

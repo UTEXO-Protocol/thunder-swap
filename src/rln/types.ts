@@ -2,41 +2,50 @@
  * Response from decode invoice API call
  */
 export interface DecodeInvoiceResponse {
+  amt_msat?: number | null;
+  expiry_sec: number;
+  timestamp: number;
+  asset_id?: string | null;
+  asset_amount?: number | null;
   payment_hash: string;
-  amt_msat: number;
-  expires_at?: number;
+  payment_secret: string;
+  payee_pubkey?: string | null;
+  network: BitcoinNetwork;
 }
 
 export interface DecodeRgbInvoiceResponse {
   recipient_id: string;
-  recipient_type: string;
-  asset_schema?: string | null;
+  recipient_type: RecipientType;
+  asset_schema?: AssetSchema | null;
   asset_id?: string | null;
   assignment: Assignment;
-  network: string;
+  network: BitcoinNetwork;
   expiration_timestamp?: number | null;
   transport_endpoints: string[];
 }
+
+export type BitcoinNetwork = 'Mainnet' | 'Testnet' | 'Testnet4' | 'Signet' | 'Regtest';
 
 /**
  * Response from pay invoice API call
  */
 export interface PayInvoiceResponse {
-  status: 'Succeeded' | 'Failed' | 'Pending';
-  payment_hash: string;
-  payment_secret: string;
+  payment_id: string;
+  payment_hash?: string | null;
+  payment_secret?: string | null;
+  status: HTLCStatus;
 }
 
 /**
  * Payment details from getPayment API call
  */
 export interface PaymentDetails {
-  amt_msat: number;
-  asset_amount: number;
-  asset_id: string;
+  amt_msat?: number | null;
+  asset_amount?: number | null;
+  asset_id?: string | null;
   payment_hash: string;
   inbound: boolean;
-  status: 'Pending' | 'Claimable' | 'Succeeded' | 'Cancelled' | 'Failed';
+  status: HTLCStatus;
   created_at: number;
   updated_at: number;
   payee_pubkey: string;
@@ -61,7 +70,7 @@ export interface GetPaymentPreimageRequest {
  * Response from getPaymentPreimage API call
  */
 export interface GetPaymentPreimageResponse {
-  status: 'Pending' | 'Claimable' | 'Succeeded' | 'Cancelled' | 'Failed' | 'Timeout';
+  status: HTLCStatus;
   preimage?: string | null;
 }
 
@@ -117,7 +126,11 @@ export interface InvoiceStatusResponse {
 /**
  * Empty response for settle/cancel operations
  */
-export interface EmptyResponse {}
+export interface EmptyResponse { }
+
+export interface RefreshTransfersRequest {
+  skip_sync: boolean;
+}
 
 /**
  * Base RGB-LN API client interface
@@ -133,7 +146,9 @@ export interface RLNClientInterface {
   invoiceCancel(request: InvoiceCancelRequest): Promise<EmptyResponse>;
   invoiceStatus(request: InvoiceStatusRequest): Promise<InvoiceStatusResponse>;
   rgbInvoiceHtlc(request: RgbInvoiceHtlcRequest): Promise<RgbInvoiceHtlcResponse>;
+  htlcScan(request: HtlcScanRequest): Promise<HtlcScanResponse>;
   htlcClaim(request: HtlcClaimRequest): Promise<HtlcClaimResponse>;
+  refreshTransfers(request: RefreshTransfersRequest): Promise<EmptyResponse>;
   sendAsset(invoice: string, overrides?: Partial<SendAssetRequest>): Promise<SendAssetResponse>;
   assetBalance(
     request: AssetBalanceRequest,
@@ -159,8 +174,9 @@ export interface RgbInvoiceHtlcRequest {
   assignment?: Assignment;
   duration_seconds?: number;
   min_confirmations?: number;
-  htlc_p2tr_script_pubkey: string; // hex
-  t_lock: number; // block height
+  payment_hash: string; // 32-byte hex
+  user_pubkey: string; // compressed pubkey hex (refund key)
+  csv: number; // relative timelock in blocks
 }
 
 export interface RgbInvoiceHtlcResponse {
@@ -168,25 +184,24 @@ export interface RgbInvoiceHtlcResponse {
   invoice: string;
   expiration_timestamp?: number;
   batch_transfer_idx: number;
+  htlc_p2tr_script_pubkey: string; // hex
+  htlc_p2tr_address?: string;
+  htlc_p2tr_internal_key_hex?: string;
+  t_lock?: number;
 }
 
 export interface HtlcClaimRequest {
   payment_hash: string;
   preimage: string;
-  funding_txid: string;
-  funding_vout: number;
-  funding_value_sat?: number;
-  htlc_p2tr_script_pubkey: string;
-  t_lock: number;
-  asset_id?: string;
-  assignment?: Assignment;
-  recipient_id?: string;
 }
 
-export interface HtlcClaimResponse {
-  txid: string;
-  status?: 'Succeeded' | 'Failed' | 'Pending';
+export interface HtlcClaimResponse { }
+
+export interface HtlcScanRequest {
+  payment_hash: string;
 }
+
+export interface HtlcScanResponse { }
 
 export interface WitnessData {
   amount_sat: number;
@@ -228,10 +243,30 @@ export interface AssetMetadataRequest {
 }
 
 export interface AssetMetadataResponse {
-  asset_id: string;
-  name?: string;
-  ticker?: string;
-  description?: string;
-  decimals?: number;
-  data?: unknown;
+  asset_schema: AssetSchema;
+  initial_supply: number;
+  max_supply: number;
+  known_circulating_supply: number;
+  timestamp: number;
+  name: string;
+  precision: number;
+  ticker?: string | null;
+  details?: string | null;
+  token?: Token | null;
 }
+
+export type AssetSchema = 'Nia' | 'Uda' | 'Cfa';
+export type RecipientType = 'Blind' | 'Witness';
+
+export interface Token {
+  index: number;
+  ticker?: string | null;
+  name?: string | null;
+  details?: string | null;
+  embedded_media?: unknown | null;
+  media?: unknown | null;
+  attachments?: Record<string, unknown>;
+  reserves?: unknown | null;
+}
+
+export type HTLCStatus = 'Pending' | 'Claimable' | 'Succeeded' | 'Cancelled' | 'Failed';

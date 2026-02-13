@@ -9,9 +9,19 @@ import { validateWIF, isValidCompressedPubkey } from './utils/crypto.js';
 import { CLIENT_ROLE, config } from './config.js';
 import readline from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
-import { startCommServer, stopCommServer, publishSubmarineData } from './utils/comm-server.js';
-import { waitForSubmarineData } from './utils/comm-client.js';
+import { startCommServer, stopCommServer } from './utils/comm-server.js';
+import {
+  waitForSubmarineRequest,
+  sendRgbInvoiceHtlcResponse,
+  waitForFundingData
+} from './utils/comm-client.js';
 import { deriveTaprootFromWIF } from './bitcoin/keys.js';
+import { rlnClient } from './rln/client.js';
+import { logStep } from './utils/log.js';
+import * as bitcoin from 'bitcoinjs-lib';
+import { getNetwork } from './bitcoin/network.js';
+
+const HTLC_EXPLORER_ADDRESS_BASE = 'http://18.119.98.232:5002/address';
 
 async function promptAmount(): Promise<{ amountSat: number }> {
   const rl = readline.createInterface({ input, output });
@@ -87,6 +97,27 @@ async function parseAmount(): Promise<number> {
   return (await promptAmount()).amountSat;
 }
 
+function htlcAddressExplorerUrl(address: string): string {
+  return `${HTLC_EXPLORER_ADDRESS_BASE}/${address}`;
+}
+
+function resolveHtlcAddress(
+  htlcAddress?: string,
+  htlcScriptPubKeyHex?: string
+): string | undefined {
+  if (htlcAddress) {
+    return htlcAddress;
+  }
+  if (!htlcScriptPubKeyHex) {
+    return undefined;
+  }
+  try {
+    return bitcoin.address.fromOutputScript(Buffer.from(htlcScriptPubKeyHex, 'hex'), getNetwork());
+  } catch {
+    return undefined;
+  }
+}
+
 function validateEnvironment(): void {
   console.log('🔧 Environment configuration check...');
 
@@ -140,6 +171,7 @@ async function runUserFlow(): Promise<void> {
     console.log(`   Preimage: ${result.preimage}`);
     console.log(`   Payment Secret: ${result.payment_secret}`);
     console.log(`   HTLC (P2TR) Address: ${result.htlc_p2tr_address}`);
+    console.log(`   HTLC Explorer: ${htlcAddressExplorerUrl(result.htlc_p2tr_address)}`);
     console.log(`   HTLC script pubkey (hex): ${result.htlc_p2tr_script_pubkey}`);
 
     if (result.deposit.fee_sat > 0) {
@@ -153,50 +185,93 @@ async function runUserFlow(): Promise<void> {
       `   Funding: ${result.funding.txid}:${result.funding.vout} (${result.funding.value} sats)`
     );
 
-    console.log('\nStep 7: Publishing submarine data for LP to consume...');
-    publishSubmarineData({
-      invoice: result.invoice,
-      fundingTxid: result.funding.txid,
-      fundingVout: result.funding.vout,
-      userRefundPubkeyHex: userRefundPubkeyHex,
-      tLock: result.t_lock // Send the exact timelock USER used when building HTLC
-    });
-    console.log('   LP can now fetch submarine data via comm client and proceed to pay & claim.');
-
-    console.log('\nStep 8: Waiting for payment confirmation...');
+    logStep('\nStep 7: Waiting for payment confirmation...');
     await runUserSettleHodlInvoice({ paymentHash: result.payment_hash });
 
-    console.log('\nStep 9: Getting invoice status...');
+    logStep('\nStep 8: Getting invoice status...');
     const invoiceStatus = await runUserWaitInvoiceStatus({ invoice: result.invoice });
     if (invoiceStatus.status === 'Succeeded') {
       console.log('   Invoice settled successfully');
     } else {
       console.log('   Invoice not settled');
     }
+
+    const userFinalResult = {
+      invoice: result.invoice,
+      payment_hash: result.payment_hash,
+      invoice_status: invoiceStatus.status,
+      htlc_p2tr_address: result.htlc_p2tr_address,
+      htlc_explorer_url: htlcAddressExplorerUrl(result.htlc_p2tr_address)
+    };
+    console.log('\nUSER flow completed:', JSON.stringify(userFinalResult, null, 2));
   } finally {
     await stopCommServer();
   }
 }
 
 async function runLpFlow(): Promise<void> {
-  console.log('Waiting for submarine data from USER...');
-  const submarineData = await waitForSubmarineData();
+  console.log('Waiting for submarine request from USER...');
+  const request = await waitForSubmarineRequest();
 
-  console.log('Submarine data received:');
-  console.log(`   Invoice: ${submarineData.invoice}`);
-  console.log(`   Funding: ${submarineData.fundingTxid}:${submarineData.fundingVout}`);
-  console.log(`   User Refund Pubkey: ${submarineData.userRefundPubkeyHex}`);
-  console.log(`   Timelock: ${submarineData.tLock}`);
+  console.log('Submarine request received:');
+  console.log(`   Invoice: ${request.invoice}`);
+  console.log(`   User Refund Pubkey: ${request.userRefundPubkeyHex}`);
 
-  const result = await runLpOperatorFlow({
-    invoice: submarineData.invoice,
-    fundingTxid: submarineData.fundingTxid,
-    fundingVout: submarineData.fundingVout,
-    userRefundPubkeyHex: submarineData.userRefundPubkeyHex,
-    tLock: submarineData.tLock // Use USER's exact timelock
+  logStep('\nStep 1: Decoding HODL invoice...');
+  const decoded = await rlnClient.decode(request.invoice);
+  const paymentHash = decoded.payment_hash;
+  console.log(`   Payment Hash (H): ${paymentHash}`);
+
+  logStep('\nStep 2: Creating RGB HTLC invoice (RLN L1)...');
+  const asset_amount = 1;
+  const asset_id = process.env.ASSET_ID_L1;
+  const expirySec = config.HODL_EXPIRY_SEC;
+  const rgbInvoiceResp = await rlnClient.rgbInvoiceHtlc({
+    asset_id,
+    assignment: {
+      type: 'Fungible',
+      value: asset_amount
+    },
+    duration_seconds: expirySec - 2 * 60 * 60, // 2 hours before expiry
+    min_confirmations: config.MIN_CONFS,
+    payment_hash: paymentHash,
+    user_pubkey: request.userRefundPubkeyHex,
+    csv: config.LOCKTIME_BLOCKS
   });
 
-  console.log('\nLP flow completed:', JSON.stringify(result, null, 2));
+  if (!rgbInvoiceResp.htlc_p2tr_script_pubkey) {
+    throw new Error('rgbinvoicehtlc response missing htlc_p2tr_script_pubkey');
+  }
+
+  await sendRgbInvoiceHtlcResponse(rgbInvoiceResp);
+  console.log('   RGB HTLC invoice sent to USER.');
+
+  logStep('\nStep 3: Waiting for funding data from USER...');
+  const funding = await waitForFundingData();
+  console.log(`   Funding: ${funding.fundingTxid}:${funding.fundingVout}`);
+
+  const result = await runLpOperatorFlow({
+    invoice: request.invoice,
+    fundingTxid: funding.fundingTxid,
+    fundingVout: funding.fundingVout,
+    userRefundPubkeyHex: request.userRefundPubkeyHex,
+    tLock: rgbInvoiceResp.t_lock,
+    htlcScriptPubKeyHex: rgbInvoiceResp.htlc_p2tr_script_pubkey
+  });
+
+  const resolvedHtlcAddress = resolveHtlcAddress(
+    rgbInvoiceResp.htlc_p2tr_address,
+    rgbInvoiceResp.htlc_p2tr_script_pubkey
+  );
+
+  const finalResult = {
+    ...result,
+    htlc_p2tr_address: resolvedHtlcAddress,
+    htlc_explorer_url: resolvedHtlcAddress
+      ? htlcAddressExplorerUrl(resolvedHtlcAddress)
+      : undefined
+  };
+  console.log('\nLP flow completed:', JSON.stringify(finalResult, null, 2));
 }
 
 async function main(): Promise<void> {
