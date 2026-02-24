@@ -10,6 +10,10 @@
     "balance": "tsx src/bitcoin/balance.ts",
     "addr": "tsx src/bitcoin/addr.ts",
     "tx": "tsx src/bitcoin/tx.ts",
+    "scan": "tsx src/rln/scan.ts",
+    "claim": "tsx src/rln/claim.ts",
+    "tracker": "tsx src/rln/htlctracker.ts",
+    "check-indexer": "tsx src/rln/check_indexer.ts",
     "test": "tsx src/bitcoin/htlc_p2tr.test.ts && tsx src/bitcoin/deposit.test.ts && tsx src/swap/runDeposit.test.ts",
     "format": "prettier --write \"src/**/*.{ts,json,md}\" \"*.{json,md}\""
   },

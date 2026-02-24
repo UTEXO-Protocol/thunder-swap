@@ -99,3 +99,30 @@ export async function waitForFunding(
 
   throw new Error(`Timeout waiting for funding confirmation at ${address}`);
 }
+
+/**
+ * Wait for a transaction to reach required confirmations
+ */
+export async function waitForTxConfirmation(
+  txid: string,
+  minConfs: number = config.MIN_CONFS,
+  maxAttempts: number = 60,
+  intervalMs: number = 60000 // 1 min
+): Promise<void> {
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      const tx = await rpc.getRawTransaction(txid, true);
+      if (tx?.confirmations >= minConfs) {
+        return;
+      }
+    } catch (error) {
+      // Transaction might not be in mempool/chain yet
+    }
+
+    if (attempt < maxAttempts - 1) {
+      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    }
+  }
+
+  throw new Error(`Timeout waiting for transaction ${txid} to reach ${minConfs} confirmations`);
+}

@@ -12,8 +12,11 @@ import {
   InvoiceStatusRequest,
   InvoiceStatusResponse,
   EmptyResponse,
+  RefreshTransfersRequest,
   RgbInvoiceHtlcRequest,
   RgbInvoiceHtlcResponse,
+  HtlcScanRequest,
+  HtlcScanResponse,
   HtlcClaimRequest,
   HtlcClaimResponse,
   SendAssetRequest,
@@ -272,29 +275,75 @@ export class RLNClient {
   }
 
   /**
+   * Scan HTLC funding and refresh RGB transfers on L1
+   */
+  async htlcScan(request: HtlcScanRequest): Promise<HtlcScanResponse> {
+    try {
+      const client = this.httpClientL1;
+      const response = await client.post('/htlcscan', request);
+      return response.data;
+    } catch (error: any) {
+      const errorMsg = error?.response?.data?.error || error?.message || 'Failed to scan HTLC';
+      throw new Error(`RLN htlcscan error: ${errorMsg}`);
+    }
+  }
+
+  /**
+   * Refresh RGB transfer state on L1 (posts consignments to proxy)
+   */
+  async refreshTransfers(request: RefreshTransfersRequest): Promise<EmptyResponse> {
+    try {
+      const client = this.httpClientL1;
+      const response = await client.post('/refreshtransfers', request);
+      return response.data;
+    } catch (error: any) {
+      const errorMsg =
+        error?.response?.data?.error || error?.message || 'Failed to refresh transfers';
+      throw new Error(`RLN refreshtransfers error: ${errorMsg}`);
+    }
+  }
+
+  /**
    * Send RGB assets using an RGB HTLC invoice on L1
    */
-  async sendAsset(invoice: string): Promise<SendAssetResponse> {
+  async sendAsset(
+    invoice: string,
+    overrides: Partial<SendAssetRequest> = {}
+  ): Promise<SendAssetResponse> {
     try {
       const client = this.httpClientL1;
 
       const decode = await client.post('/decodergbinvoice', { invoice });
+      const decoded = decode.data as DecodeRgbInvoiceResponse;
+
+      if (!decoded.asset_id) {
+        throw new Error('RGB invoice missing asset_id');
+      }
+      if (!decoded.recipient_id) {
+        throw new Error('RGB invoice missing recipient_id');
+      }
+      if (!decoded.transport_endpoints?.length && !overrides.transport_endpoints?.length) {
+        throw new Error('RGB invoice missing transport_endpoints');
+      }
 
       await client.post('/refreshtransfers', { skip_sync: false });
 
+      // HTLC scan imports use STATIC_BLINDING, so send must match.
+      const STATIC_BLINDING = 777;
       const witness_data: WitnessData = {
         amount_sat: 1000,
-      }
+        blinding: STATIC_BLINDING
+      };
       const request: SendAssetRequest = {
-        asset_id: decode.data.asset_id,
-        assignment: decode.data.assignment,
-        recipient_id: decode.data.recipient_id,
-        witness_data,
-        donation: true,
-        fee_rate: 1,
-        min_confirmations: 1,
-        transport_endpoints: decode.data.transport_endpoints,
-        skip_sync: false,
+        asset_id: decoded.asset_id,
+        assignment: decoded.assignment,
+        recipient_id: decoded.recipient_id,
+        witness_data: overrides.witness_data ?? witness_data,
+        donation: overrides.donation ?? true,
+        fee_rate: overrides.fee_rate ?? 1,
+        min_confirmations: overrides.min_confirmations ?? 1,
+        transport_endpoints: overrides.transport_endpoints ?? decoded.transport_endpoints,
+        skip_sync: overrides.skip_sync ?? false
       };
       console.log('/sendasset payload:', JSON.stringify(request, null, 2));
       const response = await client.post('/sendasset', request);

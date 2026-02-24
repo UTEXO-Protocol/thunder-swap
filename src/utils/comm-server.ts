@@ -1,16 +1,21 @@
 import http from 'http';
 import { CLIENT_ROLE, config } from '../config.js';
+import type { RgbInvoiceHtlcResponse } from '../rln/types.js';
 
-export interface SubmarineData {
-  invoice: string;
-  fundingTxid: string;
-  fundingVout: number;
+export interface SubmarineRequest {
+  invoice: string; // HODL invoice
   userRefundPubkeyHex: string;
-  tLock: number; // Timelock block height used by USER when building HTLC
   // paymentHash is NOT included - LP decodes invoice & extracts it
 }
 
-let submarineData: SubmarineData | null = null;
+export interface FundingData {
+  fundingTxid: string;
+  fundingVout: number;
+}
+
+let submarineRequest: SubmarineRequest | null = null;
+let rgbInvoiceHtlcResponse: RgbInvoiceHtlcResponse | null = null;
+let fundingData: FundingData | null = null;
 
 const PORT = config.CLIENT_COMM_PORT || 9999;
 
@@ -22,7 +27,7 @@ const server = http.createServer((req, res) => {
     });
     req.on('end', () => {
       try {
-        submarineData = JSON.parse(body) as SubmarineData;
+        submarineRequest = JSON.parse(body) as SubmarineRequest;
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ success: true }));
       } catch {
@@ -37,7 +42,64 @@ const server = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(
       JSON.stringify(
-        submarineData ?? { error: 'No submarine data available yet; waiting for USER publish.' }
+        submarineRequest ?? { error: 'No submarine request available yet; waiting for USER publish.' }
+      )
+    );
+    return;
+  }
+
+  if (req.method === 'POST' && req.url === '/rgbinvoicehtlc') {
+    let body = '';
+    req.on('data', (chunk) => {
+      body += chunk.toString();
+    });
+    req.on('end', () => {
+      try {
+        rgbInvoiceHtlcResponse = JSON.parse(body) as RgbInvoiceHtlcResponse;
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true }));
+      } catch {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Invalid JSON' }));
+      }
+    });
+    return;
+  }
+
+  if (req.method === 'GET' && req.url === '/rgbinvoicehtlc') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(
+      JSON.stringify(
+        rgbInvoiceHtlcResponse ??
+        { error: 'No rgbinvoicehtlc response available yet; waiting for LP publish.' }
+      )
+    );
+    return;
+  }
+
+  if (req.method === 'POST' && req.url === '/funding') {
+    let body = '';
+    req.on('data', (chunk) => {
+      body += chunk.toString();
+    });
+    req.on('end', () => {
+      try {
+        fundingData = JSON.parse(body) as FundingData;
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true }));
+      } catch {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Invalid JSON' }));
+      }
+    });
+    return;
+  }
+
+  if (req.method === 'GET' && req.url === '/funding') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(
+      JSON.stringify(
+        fundingData ?? { error: 'No funding data available yet; waiting for USER publish.' }
       )
     );
     return;
@@ -53,7 +115,7 @@ export function startCommServer(): Promise<void> {
   return new Promise((resolve) => {
     server.listen(PORT, () => {
       console.log(
-        `📡 USER comm server running on http://localhost:${PORT}/submarine (LP will connect via comm client)\n`
+        `📡 USER comm server running on http://localhost:${PORT} (LP will connect via comm client)\n`
       );
       resolve();
     });
@@ -75,7 +137,25 @@ export function stopCommServer(): Promise<void> {
   });
 }
 
-export function publishSubmarineData(data: SubmarineData): void {
-  submarineData = data;
-  console.log('   📤 Published submarine data for LP retrieval.');
+export function publishSubmarineRequest(data: SubmarineRequest): void {
+  submarineRequest = data;
+  console.log('   📤 Published submarine request for LP retrieval.');
+}
+
+export function publishFundingData(data: FundingData): void {
+  fundingData = data;
+  console.log('   📤 Published funding data for LP retrieval.');
+}
+
+export async function waitForRgbInvoiceHtlcResponse(
+  maxAttempts: number = 1800,
+  pollIntervalMs: number = 2000
+): Promise<RgbInvoiceHtlcResponse> {
+  for (let i = 0; i < maxAttempts; i++) {
+    if (rgbInvoiceHtlcResponse) {
+      return rgbInvoiceHtlcResponse;
+    }
+    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+  }
+  throw new Error('Failed to retrieve rgbinvoicehtlc response.');
 }
