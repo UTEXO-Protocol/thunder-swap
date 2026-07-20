@@ -21,7 +21,7 @@ interface HodlStore {
 }
 
 async function ensureStoreDir(): Promise<void> {
-  await fs.mkdir(STORE_DIR, { recursive: true });
+  await fs.mkdir(STORE_DIR, { recursive: true, mode: 0o700 });
 }
 
 async function loadStore(): Promise<HodlStore> {
@@ -40,7 +40,7 @@ async function saveStore(store: HodlStore): Promise<void> {
   await ensureStoreDir();
   const tmpPath = `${storePath}.tmp`;
   const data = JSON.stringify(store, null, 2);
-  await fs.writeFile(tmpPath, data, 'utf8');
+  await fs.writeFile(tmpPath, data, { encoding: 'utf8', mode: 0o600 });
   await fs.rename(tmpPath, storePath);
 }
 

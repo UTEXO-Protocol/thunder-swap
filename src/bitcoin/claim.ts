@@ -15,7 +15,6 @@ import {
 
 // Initialize ECC library for bitcoinjs-lib
 bitcoin.initEccLib(ecc);
-const btcnetwork = bitcoin.networks.testnet;
 
 interface UTXO {
   txid: string;
@@ -53,18 +52,7 @@ export async function claimWithPreimage(
     throw new Error(`Invalid preimage length: ${preimage.length} bytes, expected 32`);
   }
 
-  const ECPair: ECPairAPI = ECPairFactory(tinysecp);
-  // Parse WIF
-  let lpKeyPair: ECPairInterface;
-  try {
-    lpKeyPair = ECPair.fromWIF(lpWif, btcnetwork);
-    console.log('LP KeyPair created successfully');
-    console.log('Public key:', Buffer.from(lpKeyPair.publicKey).toString('hex'));
-  } catch (error) {
-    throw new Error(`Invalid LP WIF: ${error}`);
-  }
-
-  // Determine network
+  // Determine network from config before parsing WIF
   let network: bitcoin.Network;
   switch (config.NETWORK) {
     case 'mainnet':
@@ -79,6 +67,17 @@ export async function claimWithPreimage(
       break;
     default:
       throw new Error(`Unsupported network: ${config.NETWORK}`);
+  }
+
+  const ECPair: ECPairAPI = ECPairFactory(tinysecp);
+  // Parse WIF using the correct network
+  let lpKeyPair: ECPairInterface;
+  try {
+    lpKeyPair = ECPair.fromWIF(lpWif, network);
+    console.log('LP KeyPair created successfully');
+    console.log('Public key:', Buffer.from(lpKeyPair.publicKey).toString('hex'));
+  } catch (error) {
+    throw new Error(`Invalid LP WIF: ${error}`);
   }
 
   // Create transaction manually for HTLC witness
