@@ -1,5 +1,5 @@
 import axios, { AxiosInstance } from 'axios';
-import { config } from '../config.js';
+import { CLIENT_ROLE, config } from '../config.js';
 import {
   DecodeInvoiceResponse,
   PayInvoiceResponse,
@@ -62,10 +62,21 @@ export class RLNClient {
       }
     });
 
-    // RLN L2 client for LP - from .env.lp
-    const lpEnv = parse(readFileSync('.env.lp')); // does not overwrite process.env
-    const lpL2Base = lpEnv.RLN_BASE_URL;
-    const lpL2Key = lpEnv.RLN_API_KEY;
+    // RLN L2 client for LP - from .env.lp (only loaded for LP role;
+    // USER role does not have .env.lp and would crash with ENOENT)
+    let lpL2Base: string | undefined;
+    let lpL2Key: string | undefined;
+    if (CLIENT_ROLE === 'LP') {
+      try {
+        const lpEnv = parse(readFileSync('.env.lp')); // does not overwrite process.env
+        lpL2Base = lpEnv.RLN_BASE_URL;
+        lpL2Key = lpEnv.RLN_API_KEY;
+      } catch (err: any) {
+        if (err.code !== 'ENOENT') {
+          console.warn(`Warning: failed to read .env.lp: ${err.message}`);
+        }
+      }
+    }
 
     this.httpClientL2Lp = axios.create({
       baseURL: lpL2Base,
