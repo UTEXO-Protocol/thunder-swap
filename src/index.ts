@@ -21,7 +21,7 @@ import { logStep } from './utils/log.js';
 import * as bitcoin from 'bitcoinjs-lib';
 import { getNetwork } from './bitcoin/network.js';
 
-const HTLC_EXPLORER_ADDRESS_BASE = 'http://18.119.98.232:5002/address';
+const HTLC_EXPLORER_ADDRESS_BASE = process.env.HTLC_EXPLORER_URL ?? 'https://mempool.space/address';
 
 async function promptAmount(): Promise<{ amountSat: number }> {
   const rl = readline.createInterface({ input, output });
@@ -154,7 +154,7 @@ async function runUserFlow(): Promise<void> {
     const userRefundPubkeyHex = derived.pubkey_hex;
 
     // Prompt for swap amount
-    const amountSat = 3000//await parseAmount();
+    const amountSat = await parseAmount();
 
     console.log('\nSubmarine Swap Parameters:');
     console.log(`   Amount: ${amountSat} sats`);
