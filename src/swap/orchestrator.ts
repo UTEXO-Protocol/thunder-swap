@@ -2,10 +2,11 @@ import { rlnClient } from '../rln/client.js';
 import { rpc } from '../bitcoin/rpc.js';
 import { waitForFunding, waitForTxConfirmation } from '../bitcoin/watch.js';
 import { buildHtlcRedeemScript } from '../bitcoin/htlc.js';
+import { reconstructP2TRScriptPubKey } from '../bitcoin/htlc_p2tr.js';
 import { claimWithPreimage } from '../bitcoin/claim.js';
 import { buildRefundPsbtBase64 } from '../bitcoin/refund.js';
 import { sendDepositTransaction } from '../bitcoin/deposit.js';
-import { sha256hex, hexToBuffer } from '../utils/crypto.js';
+import { sha256hex, hexToBuffer, bufferToHex } from '../utils/crypto.js';
 import { randomBytes } from 'crypto';
 import { getHodlRecord, persistHodlRecord } from '../utils/store.js';
 import { config } from '../config.js';
@@ -140,7 +141,8 @@ export async function runDeposit(
   const persist = depsOverride.persistHodlRecord ?? persistHodlRecord;
   const cfg = depsOverride.config ?? config;
   const publishRequest = depsOverride.publishSubmarineRequest ?? publishSubmarineRequest;
-  const waitRgbInvoice = depsOverride.waitForRgbInvoiceHtlcResponse ?? waitForRgbInvoiceHtlcResponse;
+  const waitRgbInvoice =
+    depsOverride.waitForRgbInvoiceHtlcResponse ?? waitForRgbInvoiceHtlcResponse;
   const publishFunding = depsOverride.publishFundingData ?? publishFundingData;
 
   if (!Number.isFinite(amountSat) || amountSat <= 0) {
@@ -203,24 +205,44 @@ export async function runDeposit(
     throw new Error('RLN did not return htlc_p2tr_script_pubkey');
   }
   const htlcScriptPubKeyHex = rgbInvoiceResp.htlc_p2tr_script_pubkey;
+
+  // Verify the LP-provided HTLC script against our local template BEFORE
+  // funding it. The claim path must commit to OUR payment hash and the
+  // configured LP key, the refund path to OUR key: otherwise a malicious or
+  // buggy server can make us deposit into a script that pays someone else or
+  // that we can never refund. t_lock comes from the server too, so require
+  // it — without it the refund leaf is unverifiable.
+  const tLock = rgbInvoiceResp.t_lock;
+  if (tLock == null) {
+    throw new Error(
+      'LP did not return t_lock in rgbinvoicehtlc response; cannot verify the HTLC script'
+    );
+  }
+  const expectedScriptPubKeyHex = bufferToHex(
+    reconstructP2TRScriptPubKey({
+      payment_hash: H,
+      lp_pubkey: cfg.LP_PUBKEY_HEX,
+      user_pubkey: userRefundPubkeyHex,
+      cltv_expiry: tLock
+    })
+  );
+  if (expectedScriptPubKeyHex.toLowerCase() !== htlcScriptPubKeyHex.toLowerCase()) {
+    throw new Error(
+      'LP-provided HTLC script does not match the locally reconstructed template ' +
+        '(payment hash, LP key, refund key, timelock); refusing to fund'
+    );
+  }
+
   const derivedAddress = bitcoin.address.fromOutputScript(
     Buffer.from(htlcScriptPubKeyHex, 'hex'),
     getNetwork()
   );
-  if (
-    rgbInvoiceResp.htlc_p2tr_address &&
-    rgbInvoiceResp.htlc_p2tr_address !== derivedAddress
-  ) {
+  if (rgbInvoiceResp.htlc_p2tr_address && rgbInvoiceResp.htlc_p2tr_address !== derivedAddress) {
     console.warn(
       `   WARNING: htlc_p2tr_address mismatch (server ${rgbInvoiceResp.htlc_p2tr_address} vs derived ${derivedAddress})`
     );
   }
   const htlcAddress = rgbInvoiceResp.htlc_p2tr_address ?? derivedAddress;
-
-  const tLock = rgbInvoiceResp.t_lock;
-  if (tLock == null) {
-    console.warn('   WARNING: LP did not return t_lock in rgbinvoicehtlc response');
-  }
 
   console.log(`   HTLC script pubkey: ${htlcScriptPubKeyHex}`);
   console.log(`   P2TR HTLC Address: ${htlcAddress}`);
@@ -247,9 +269,7 @@ export async function runDeposit(
   // Step 5: Send RGB asset to HTLC via /sendasset (uses L1 backend)
   logStep('\nStep 5: Sending RGB asset via /sendasset...');
   const rgbSendResp = await rln.sendAsset(rgbInvoiceResp.invoice);
-  console.log(
-    `   Assign RGB asset txid: ${rgbSendResp.txid}`
-  );
+  console.log(`   Assign RGB asset txid: ${rgbSendResp.txid}`);
 
   // Step 6: Wait for RGB send confirmation, then refresh transfers (posts consignment)
   logStep('\nStep 6: Waiting for RGB send confirmation...');
@@ -380,7 +400,14 @@ export async function runUserWaitInvoiceStatus(
  * LP/operator-side flow: verify HTLC, pay invoice, wait for settlement, claim on-chain.
  */
 export async function runLpOperatorFlow(
-  { invoice, fundingTxid, fundingVout, userRefundPubkeyHex, tLock, htlcScriptPubKeyHex }: LpOperatorParams,
+  {
+    invoice,
+    fundingTxid,
+    fundingVout,
+    userRefundPubkeyHex,
+    tLock,
+    htlcScriptPubKeyHex
+  }: LpOperatorParams,
   depsOverride: Partial<RunLpOperatorDeps> = {}
 ): Promise<LpOperatorResult> {
   const rln = depsOverride.rlnClient ?? rlnClient;

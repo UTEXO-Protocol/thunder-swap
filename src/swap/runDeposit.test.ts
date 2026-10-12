@@ -1,7 +1,21 @@
 import assert from 'node:assert/strict';
 import type { Config } from '../config.js';
 import { getNetwork } from '../bitcoin/network.js';
+import { reconstructP2TRScriptPubKey } from '../bitcoin/htlc_p2tr.js';
+import { bufferToHex } from '../utils/crypto.js';
 import * as bitcoin from 'bitcoinjs-lib';
+import * as ecc from 'tiny-secp256k1';
+import { ECPairFactory } from 'ecpair';
+
+const ECPair = ECPairFactory(ecc);
+
+// Compressed G (valid curve point) as the configured LP key.
+const LP_PUBKEY = '0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798';
+const T_LOCK = 800000;
+
+function randomUserPubkeyHex(): string {
+  return Buffer.from(ECPair.makeRandom().publicKey).toString('hex');
+}
 
 // Minimal env defaults so config parsing succeeds when this file is run directly.
 process.env.CLIENT_ROLE ??= 'USER';
@@ -78,15 +92,10 @@ const tests: TestCase[] = [
       const cfg = await makeConfig({
         LOCKTIME_BLOCKS: 300, // ~50 hours at 10 min/blk
         HODL_EXPIRY_SEC: 86_400, // 1 day
-        MIN_CONFS: 2
+        MIN_CONFS: 2,
+        LP_PUBKEY_HEX: LP_PUBKEY
       });
-
-      const xonly = '79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798';
-      const htlcScriptPubKeyHex = `5120${xonly}`;
-      const expectedAddress = bitcoin.address.fromOutputScript(
-        Buffer.from(htlcScriptPubKeyHex, 'hex'),
-        getNetwork()
-      );
+      const userRefundPubkeyHex = randomUserPubkeyHex();
 
       const mockedDeps = {
         config: cfg,
@@ -108,13 +117,28 @@ const tests: TestCase[] = [
           calls.publishSubmarineRequest = req;
         },
         waitForRgbInvoiceHtlcResponse: async () => {
+          // Honest LP: script reconstructed from OUR payment hash, the
+          // configured LP key, our refund key and the advertised timelock.
+          const htlcScriptPubKeyHex = bufferToHex(
+            reconstructP2TRScriptPubKey({
+              payment_hash: calls.invoiceHodl.payment_hash,
+              lp_pubkey: LP_PUBKEY,
+              user_pubkey: userRefundPubkeyHex,
+              cltv_expiry: T_LOCK
+            })
+          );
+          const expectedAddress = bitcoin.address.fromOutputScript(
+            Buffer.from(htlcScriptPubKeyHex, 'hex'),
+            getNetwork()
+          );
           return {
             recipient_id: 'rgb:recipient',
             invoice: 'rgb:invoice',
             expiration_timestamp: 0,
             batch_transfer_idx: 0,
             htlc_p2tr_script_pubkey: htlcScriptPubKeyHex,
-            htlc_p2tr_address: expectedAddress
+            htlc_p2tr_address: expectedAddress,
+            t_lock: T_LOCK
           } as any;
         },
         publishFundingData: (funding: any) => {
@@ -149,16 +173,15 @@ const tests: TestCase[] = [
       const result = await runDeposit(
         {
           amountSat: 1500,
-          userRefundPubkeyHex: '02aa'.padEnd(66, 'b')
+          userRefundPubkeyHex
         },
         mockedDeps
       );
 
       assert.match(result.payment_hash, /^[0-9a-f]{64}$/);
       assert.equal(result.amount_msat, 1500 * 1000);
-      assert.equal(result.htlc_p2tr_address, expectedAddress);
-      assert.equal(result.htlc_p2tr_internal_key_hex, undefined);
-      assert.equal(result.t_lock, undefined);
+      assert.equal(result.htlc_p2tr_address, calls.sendDeposit.address);
+      assert.equal(result.t_lock, T_LOCK);
       assert.deepEqual(result.funding, { txid: 'fundtx', vout: 0, value: 12345 });
       assert.equal(result.deposit.txid, 'deposittx');
       assert.equal(result.deposit.psbt_base64, 'cHNidP8BAFICAAAA');
@@ -169,8 +192,7 @@ const tests: TestCase[] = [
       // Check dependency calls for UX clarity
       assert.equal(calls.invoiceHodl.amt_msat, 1500 * 1000);
       assert.equal(calls.publishSubmarineRequest.invoice, 'lnbc1dummy');
-      assert.equal(calls.publishSubmarineRequest.userRefundPubkeyHex, '02aa'.padEnd(66, 'b'));
-      assert.equal(calls.sendDeposit.address, expectedAddress);
+      assert.equal(calls.publishSubmarineRequest.userRefundPubkeyHex, userRefundPubkeyHex);
       assert.equal(calls.sendDeposit.amountSat, 1500);
       assert.equal(calls.waitForFunding.minConfs, 2);
       assert.equal(calls.sendAsset, 'rgb:invoice');
@@ -189,26 +211,22 @@ const tests: TestCase[] = [
       const cfg = await makeConfig({
         LOCKTIME_BLOCKS: 300,
         HODL_EXPIRY_SEC: 86_400,
-        MIN_CONFS: 1
+        MIN_CONFS: 1,
+        LP_PUBKEY_HEX: LP_PUBKEY
       });
-
-      const xonly = '79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798';
-      const htlcScriptPubKeyHex = `5120${xonly}`;
-      const expectedAddress = bitcoin.address.fromOutputScript(
-        Buffer.from(htlcScriptPubKeyHex, 'hex'),
-        getNetwork()
-      );
+      const userRefundPubkeyHex = randomUserPubkeyHex();
 
       const runDeposit = await loadRunDeposit();
       const result = await runDeposit(
         {
           amountSat: 2000,
-          userRefundPubkeyHex: '02ff'.padEnd(66, 'e')
+          userRefundPubkeyHex
         },
         {
           config: cfg,
           rlnClient: {
-            invoiceHodl: async () => {
+            invoiceHodl: async ({ payment_hash }: any) => {
+              calls.invoiceHodl = { payment_hash };
               return { invoice: 'lnbc1dummy', payment_secret: 'secret123' };
             },
             sendAsset: async (invoice: string) => {
@@ -222,12 +240,21 @@ const tests: TestCase[] = [
           } as any,
           publishSubmarineRequest: (_req: any) => {},
           waitForRgbInvoiceHtlcResponse: async () => {
+            const htlcScriptPubKeyHex = bufferToHex(
+              reconstructP2TRScriptPubKey({
+                payment_hash: calls.invoiceHodl.payment_hash,
+                lp_pubkey: LP_PUBKEY,
+                user_pubkey: userRefundPubkeyHex,
+                cltv_expiry: T_LOCK
+              })
+            );
             return {
               recipient_id: 'rgb:recipient',
               invoice: 'rgb:invoice-2',
               expiration_timestamp: 0,
               batch_transfer_idx: 0,
-              htlc_p2tr_script_pubkey: htlcScriptPubKeyHex
+              htlc_p2tr_script_pubkey: htlcScriptPubKeyHex,
+              t_lock: T_LOCK
             } as any;
           },
           publishFundingData: (_funding: any) => {},
@@ -251,12 +278,143 @@ const tests: TestCase[] = [
         }
       );
 
+      const expectedAddress = bitcoin.address.fromOutputScript(
+        Buffer.from(
+          bufferToHex(
+            reconstructP2TRScriptPubKey({
+              payment_hash: result.payment_hash,
+              lp_pubkey: LP_PUBKEY,
+              user_pubkey: userRefundPubkeyHex,
+              cltv_expiry: T_LOCK
+            })
+          ),
+          'hex'
+        ),
+        getNetwork()
+      );
       assert.equal(calls.sendDepositAddress, expectedAddress);
       assert.equal(result.htlc_p2tr_address, expectedAddress);
       assert.equal(calls.sendAsset, 'rgb:invoice-2');
       assert.equal(calls.refreshTransfers, true);
     }
   },
+  {
+    name: 'refuses to fund when the LP script does not match the local template',
+    run: async () => {
+      const calls: any = {};
+      const cfg = await makeConfig({
+        LOCKTIME_BLOCKS: 300,
+        HODL_EXPIRY_SEC: 86_400,
+        LP_PUBKEY_HEX: LP_PUBKEY
+      });
+      const userRefundPubkeyHex = randomUserPubkeyHex();
+      const runDeposit = await loadRunDeposit();
+
+      await assert.rejects(
+        runDeposit(
+          { amountSat: 3000, userRefundPubkeyHex },
+          {
+            config: cfg,
+            rlnClient: {
+              invoiceHodl: async ({ payment_hash }: any) => {
+                calls.invoiceHodl = { payment_hash };
+                return { invoice: 'lnbc1dummy', payment_secret: 'secret123' };
+              }
+            } as any,
+            publishSubmarineRequest: (_req: any) => {},
+            waitForRgbInvoiceHtlcResponse: async () => {
+              // Malicious/buggy LP: script for a DIFFERENT payment hash, with
+              // a self-consistent address so the old address check would pass.
+              const tamperedHash = '00'.repeat(32);
+              const htlcScriptPubKeyHex = bufferToHex(
+                reconstructP2TRScriptPubKey({
+                  payment_hash: tamperedHash,
+                  lp_pubkey: LP_PUBKEY,
+                  user_pubkey: userRefundPubkeyHex,
+                  cltv_expiry: T_LOCK
+                })
+              );
+              return {
+                recipient_id: 'rgb:recipient',
+                invoice: 'rgb:invoice',
+                expiration_timestamp: 0,
+                batch_transfer_idx: 0,
+                htlc_p2tr_script_pubkey: htlcScriptPubKeyHex,
+                htlc_p2tr_address: bitcoin.address.fromOutputScript(
+                  Buffer.from(htlcScriptPubKeyHex, 'hex'),
+                  getNetwork()
+                ),
+                t_lock: T_LOCK
+              } as any;
+            },
+            publishFundingData: (_funding: any) => {},
+            sendDeposit: async () => {
+              calls.sendDeposit = true;
+              throw new Error('should not be called');
+            },
+            waitForFunding: async () => {
+              throw new Error('should not be called');
+            },
+            persistHodlRecord: async () => {}
+          }
+        ),
+        /does not match the locally reconstructed template/
+      );
+      assert.equal(calls.sendDeposit, undefined);
+    }
+  },
+  {
+    name: 'refuses to fund when the LP omits t_lock',
+    run: async () => {
+      const cfg = await makeConfig({
+        LOCKTIME_BLOCKS: 300,
+        HODL_EXPIRY_SEC: 86_400,
+        LP_PUBKEY_HEX: LP_PUBKEY
+      });
+      const runDeposit = await loadRunDeposit();
+
+      await assert.rejects(
+        runDeposit(
+          { amountSat: 3000, userRefundPubkeyHex: randomUserPubkeyHex() },
+          {
+            config: cfg,
+            rlnClient: {
+              invoiceHodl: async () => {
+                return { invoice: 'lnbc1dummy', payment_secret: 'secret123' };
+              }
+            } as any,
+            publishSubmarineRequest: (_req: any) => {},
+            waitForRgbInvoiceHtlcResponse: async () => {
+              const htlcScriptPubKeyHex = bufferToHex(
+                reconstructP2TRScriptPubKey({
+                  payment_hash: '11'.repeat(32),
+                  lp_pubkey: LP_PUBKEY,
+                  user_pubkey: randomUserPubkeyHex(),
+                  cltv_expiry: T_LOCK
+                })
+              );
+              return {
+                recipient_id: 'rgb:recipient',
+                invoice: 'rgb:invoice',
+                expiration_timestamp: 0,
+                batch_transfer_idx: 0,
+                htlc_p2tr_script_pubkey: htlcScriptPubKeyHex
+              } as any;
+            },
+            publishFundingData: (_funding: any) => {},
+            sendDeposit: async () => {
+              throw new Error('should not be called');
+            },
+            waitForFunding: async () => {
+              throw new Error('should not be called');
+            },
+            persistHodlRecord: async () => {}
+          }
+        ),
+        /did not return t_lock/
+      );
+    }
+  }
 ];
 
 for (const test of tests) {
