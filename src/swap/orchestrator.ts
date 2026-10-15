@@ -2,6 +2,7 @@ import { rlnClient } from '../rln/client.js';
 import { rpc } from '../bitcoin/rpc.js';
 import { waitForFunding, waitForTxConfirmation } from '../bitcoin/watch.js';
 import { buildHtlcRedeemScript } from '../bitcoin/htlc.js';
+import { verifyFundingTransaction } from '../bitcoin/verify_p2tr.js';
 import { claimWithPreimage } from '../bitcoin/claim.js';
 import { buildRefundPsbtBase64 } from '../bitcoin/refund.js';
 import { sendDepositTransaction } from '../bitcoin/deposit.js';
@@ -140,7 +141,8 @@ export async function runDeposit(
   const persist = depsOverride.persistHodlRecord ?? persistHodlRecord;
   const cfg = depsOverride.config ?? config;
   const publishRequest = depsOverride.publishSubmarineRequest ?? publishSubmarineRequest;
-  const waitRgbInvoice = depsOverride.waitForRgbInvoiceHtlcResponse ?? waitForRgbInvoiceHtlcResponse;
+  const waitRgbInvoice =
+    depsOverride.waitForRgbInvoiceHtlcResponse ?? waitForRgbInvoiceHtlcResponse;
   const publishFunding = depsOverride.publishFundingData ?? publishFundingData;
 
   if (!Number.isFinite(amountSat) || amountSat <= 0) {
@@ -207,10 +209,7 @@ export async function runDeposit(
     Buffer.from(htlcScriptPubKeyHex, 'hex'),
     getNetwork()
   );
-  if (
-    rgbInvoiceResp.htlc_p2tr_address &&
-    rgbInvoiceResp.htlc_p2tr_address !== derivedAddress
-  ) {
+  if (rgbInvoiceResp.htlc_p2tr_address && rgbInvoiceResp.htlc_p2tr_address !== derivedAddress) {
     console.warn(
       `   WARNING: htlc_p2tr_address mismatch (server ${rgbInvoiceResp.htlc_p2tr_address} vs derived ${derivedAddress})`
     );
@@ -247,9 +246,7 @@ export async function runDeposit(
   // Step 5: Send RGB asset to HTLC via /sendasset (uses L1 backend)
   logStep('\nStep 5: Sending RGB asset via /sendasset...');
   const rgbSendResp = await rln.sendAsset(rgbInvoiceResp.invoice);
-  console.log(
-    `   Assign RGB asset txid: ${rgbSendResp.txid}`
-  );
+  console.log(`   Assign RGB asset txid: ${rgbSendResp.txid}`);
 
   // Step 6: Wait for RGB send confirmation, then refresh transfers (posts consignment)
   logStep('\nStep 6: Waiting for RGB send confirmation...');
@@ -380,7 +377,14 @@ export async function runUserWaitInvoiceStatus(
  * LP/operator-side flow: verify HTLC, pay invoice, wait for settlement, claim on-chain.
  */
 export async function runLpOperatorFlow(
-  { invoice, fundingTxid, fundingVout, userRefundPubkeyHex, tLock, htlcScriptPubKeyHex }: LpOperatorParams,
+  {
+    invoice,
+    fundingTxid,
+    fundingVout,
+    userRefundPubkeyHex,
+    tLock,
+    htlcScriptPubKeyHex
+  }: LpOperatorParams,
   depsOverride: Partial<RunLpOperatorDeps> = {}
 ): Promise<LpOperatorResult> {
   const rln = depsOverride.rlnClient ?? rlnClient;
@@ -399,9 +403,28 @@ export async function runLpOperatorFlow(
   console.log(`   Amount: ${amountMsat} millisatoshis`);
   console.log(`   Expires: ${new Date(expiresAt * 1000).toISOString()}`);
 
-  // Step 2: Verify HTLC funding output (P2TR).
-  logStep('\nStep 2: Skipping client-side HTLC verification for now.'); // TODO call htcl scan to verify funding
-  console.log(`   Funding Transaction: ${fundingTxid}:${fundingVout}`);
+  // Step 2: Verify the HTLC funding output BEFORE paying the invoice. The
+  // invoice is ours to pay but its preimage is already known to whoever
+  // created it: paying an unfunded, underfunded or unclaimable output is an
+  // outright gift, so refuse unless the funding pays exactly the HTLC our
+  // template describes.
+  logStep('\nStep 2: Verifying HTLC funding...');
+  if (tLock == null) {
+    throw new Error('Cannot verify HTLC funding without t_lock; refusing to pay');
+  }
+  const lpPubkeyHex = deriveTaprootFromWIF(config.WIF).pubkey_hex;
+  await verifyFundingTransaction(
+    { txid: fundingTxid, vout: fundingVout },
+    {
+      payment_hash: paymentHash,
+      lp_pubkey: lpPubkeyHex,
+      user_pubkey: userRefundPubkeyHex,
+      cltv_expiry: tLock
+    },
+    amountMsat,
+    config.MIN_CONFS
+  );
+  console.log(`   Funding verified: ${fundingTxid}:${fundingVout}`);
   if (htlcScriptPubKeyHex) {
     console.log(`   HTLC scriptPubKey: ${htlcScriptPubKeyHex}`);
   }
